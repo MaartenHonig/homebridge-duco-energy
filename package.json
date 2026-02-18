@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "description": "Homebridge plugin for Duco Energy ventilation systems with Connectivity Board 2.0",
   "main": "dist/index.js",
+  “homebridge”: {
+    “platforms”: [
+    {
+      “name”: “DucoEnergy”,
+      “platform”: “DucoEnergy”
+    }
+    ]
+  },
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
@@ -22,7 +30,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/homebridge-duco-energy.git"
+    "url": "https://github.com/MaartenHonig/homebridge-duco-energy.git"
   },
   "engines": {
     "homebridge": ">=1.6.0",
