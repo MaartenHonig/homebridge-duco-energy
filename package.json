@@ -30,7 +30,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MaartenHonig/homebridge-duco-energy.git"
+    "url": "https://github.com/your-username/homebridge-duco-energy.git"
   },
   "engines": {
     "homebridge": ">=1.6.0",
