@@ -10,12 +10,6 @@ export declare class DucoBoxAccessory {
     private currentState;
     constructor(platform: DucoEnergyPlatform, accessory: PlatformAccessory, log: Logger, nodeId: number);
     private setVentilationState;
-    /**
-     * Update all switch states so only the active one is ON
-     */
     private updateSwitchStates;
-    /**
-     * Update from polled API data
-     */
     updateFromNode(node: DucoNode): void;
 }

@@ -275,16 +275,16 @@ class DashboardServer {
   <h1>🌬️ Duco Energy Dashboard</h1>
   <p class="subtitle">Real-time ventilation monitoring &amp; sensor data</p>
 
+  <div class="cards" id="liveCards">
+    <div class="loading">Loading sensor data...</div>
+  </div>
+
   <div class="controls" id="rangeControls">
     <button onclick="setRange('1h')">1 Hour</button>
     <button onclick="setRange('6h')">6 Hours</button>
     <button onclick="setRange('24h')" class="active">24 Hours</button>
     <button onclick="setRange('7d')">7 Days</button>
     <button onclick="setRange('30d')">30 Days</button>
-  </div>
-
-  <div class="cards" id="liveCards">
-    <div class="loading">Loading sensor data...</div>
   </div>
 
   <div class="chart-row">
@@ -565,7 +565,8 @@ class DashboardServer {
     function setRange(range) {
       currentRange = range;
       document.querySelectorAll('#rangeControls button').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent.toLowerCase().replace(' ', '') === range);
+        const btnRange = btn.getAttribute('onclick').match(/'([^']+)'/);
+        btn.classList.toggle('active', btnRange && btnRange[1] === range);
       });
       refreshCharts();
     }
