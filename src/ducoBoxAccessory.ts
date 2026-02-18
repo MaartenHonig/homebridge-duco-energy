@@ -8,22 +8,28 @@ import { DucoEnergyPlatform } from './platform';
 import { DucoNode } from './ducoApi';
 
 /**
- * DucoBox Ventilation Fan Accessory
+ * DucoBox Ventilation Accessory — 4 Switches
  *
- * Exposes the main DucoBox unit as a Fan in HomeKit with 4 speeds:
- *   0% = AUTO mode
- *  33% = MAN1 (low)
- *  67% = MAN2 (medium)
- * 100% = MAN3 (high)
+ * Exposes the DucoBox as 4 mutually exclusive switches in HomeKit:
+ *   - Auto
+ *   - Speed 1 (MAN1)
+ *   - Speed 2 (MAN2)
+ *   - Speed 3 (MAN3)
  *
- * The fan is always "on" (ventilation is always running).
- * Speed 0 maps to AUTO, not OFF.
+ * Only one switch can be on at a time. Turning one on
+ * automatically turns the others off.
  */
+
+interface VentilationMode {
+  name: string;
+  state: string;
+  service: Service;
+}
+
 export class DucoBoxAccessory {
-  private service: Service;
+  private modes: VentilationMode[] = [];
   private nodeId: number;
   private currentState: string = 'AUTO';
-  private currentSpeed: number = 0;
 
   constructor(
     private readonly platform: DucoEnergyPlatform,
@@ -39,76 +45,73 @@ export class DucoBoxAccessory {
       .setCharacteristic(this.platform.Characteristic.Model, 'DucoBox Energy')
       .setCharacteristic(this.platform.Characteristic.SerialNumber, `DUCO-BOX-${nodeId}`);
 
-    // Fan v2 service
-    this.service = this.accessory.getService(this.platform.Service.Fanv2)
-      || this.accessory.addService(this.platform.Service.Fanv2, 'Duco Ventilation');
+    // Create 4 switches
+    const modeDefinitions = [
+      { name: 'Auto', state: 'AUTO', subtype: 'duco-auto' },
+      { name: 'Speed 1', state: 'MAN1', subtype: 'duco-man1' },
+      { name: 'Speed 2', state: 'MAN2', subtype: 'duco-man2' },
+      { name: 'Speed 3', state: 'MAN3', subtype: 'duco-man3' },
+    ];
 
-    // Active state (always active — ventilation can't be turned off)
-    this.service.getCharacteristic(this.platform.Characteristic.Active)
-      .onGet(() => this.platform.Characteristic.Active.ACTIVE)
-      .onSet((_value: CharacteristicValue) => {
-        // Ventilation is always active, setting to inactive → go to AUTO
-        this.setVentilationState('AUTO');
-      });
+    for (const def of modeDefinitions) {
+      // Find existing or create new service, using subtype to distinguish
+      let service = this.accessory.getServiceById(this.platform.Service.Switch, def.subtype);
+      if (!service) {
+        service = this.accessory.addService(
+          this.platform.Service.Switch,
+          def.name,
+          def.subtype,
+        );
+      }
+      service.setCharacteristic(this.platform.Characteristic.Name, def.name);
 
-    // Rotation speed: 0=AUTO, 33=MAN1, 67=MAN2, 100=MAN3
-    this.service.getCharacteristic(this.platform.Characteristic.RotationSpeed)
-      .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
-      .onGet(() => this.currentSpeed)
-      .onSet((value: CharacteristicValue) => {
-        const speed = value as number;
-        let state: string;
+      const mode: VentilationMode = {
+        name: def.name,
+        state: def.state,
+        service,
+      };
 
-        if (speed <= 10) {
-          state = 'AUTO';
-        } else if (speed <= 40) {
-          state = 'MAN1';
-        } else if (speed <= 75) {
-          state = 'MAN2';
-        } else {
-          state = 'MAN3';
-        }
+      // On/off handlers
+      service.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentState === def.state)
+        .onSet((value: CharacteristicValue) => {
+          if (value) {
+            // Turning this mode ON
+            this.setVentilationState(def.state);
+          } else {
+            // Turning off → go to AUTO (can't turn off ventilation)
+            if (this.currentState === def.state) {
+              this.setVentilationState('AUTO');
+            }
+          }
+        });
 
-        this.setVentilationState(state);
-      });
-
-    // Current fan state (useful for showing in Home app)
-    this.service.getCharacteristic(this.platform.Characteristic.CurrentFanState)
-      .onGet(() => this.platform.Characteristic.CurrentFanState.BLOWING_AIR);
-
-    // Target fan state: Auto = 1, Manual = 0
-    this.service.getCharacteristic(this.platform.Characteristic.TargetFanState)
-      .onGet(() => {
-        return this.currentState === 'AUTO'
-          ? this.platform.Characteristic.TargetFanState.AUTO
-          : this.platform.Characteristic.TargetFanState.MANUAL;
-      })
-      .onSet((value: CharacteristicValue) => {
-        if (value === this.platform.Characteristic.TargetFanState.AUTO) {
-          this.setVentilationState('AUTO');
-        }
-        // Manual is handled via RotationSpeed
-      });
+      this.modes.push(mode);
+    }
   }
 
   private async setVentilationState(state: string): Promise<void> {
+    if (state === this.currentState) return;
+
     try {
       this.log.info(`Setting ventilation to ${state} (node ${this.nodeId})`);
       await this.platform.apiClient.setNodeVentilationState(this.nodeId, state);
       this.currentState = state;
-      this.currentSpeed = this.stateToSpeed(state);
+      this.updateSwitchStates();
     } catch (err) {
       this.log.error(`Failed to set ventilation state: ${err}`);
     }
   }
 
-  private stateToSpeed(state: string): number {
-    switch (state) {
-      case 'AUTO': return 0;
-      case 'MAN1': return 33;
-      case 'MAN2': return 67;
-      case 'MAN3': return 100;
-      default: return 0;
+  /**
+   * Update all switch states so only the active one is ON
+   */
+  private updateSwitchStates(): void {
+    for (const mode of this.modes) {
+      mode.service.updateCharacteristic(
+        this.platform.Characteristic.On,
+        this.currentState === mode.state,
+      );
     }
   }
 
@@ -116,22 +119,10 @@ export class DucoBoxAccessory {
    * Update from polled API data
    */
   updateFromNode(node: DucoNode): void {
-    const state = node.Ventilation?.State?.Val ?? 'AUTO';
+    const state = node.Ventilation?.State?.Val || 'AUTO';
     if (state !== this.currentState) {
       this.currentState = state;
-      this.currentSpeed = this.stateToSpeed(state);
-
-      this.service.updateCharacteristic(
-        this.platform.Characteristic.RotationSpeed,
-        this.currentSpeed,
-      );
-
-      this.service.updateCharacteristic(
-        this.platform.Characteristic.TargetFanState,
-        state === 'AUTO'
-          ? this.platform.Characteristic.TargetFanState.AUTO
-          : this.platform.Characteristic.TargetFanState.MANUAL,
-      );
+      this.updateSwitchStates();
     }
   }
 }

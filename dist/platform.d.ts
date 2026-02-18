@@ -36,5 +36,3 @@ export declare class DucoEnergyPlatform implements DynamicPlatformPlugin {
      */
     private startCleanupTimer;
 }
-declare const _default: (api: API) => void;
-export default _default;

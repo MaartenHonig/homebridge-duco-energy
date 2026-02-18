@@ -79,8 +79,9 @@ class DucoEnergyPlatform {
             const nodes = response.Nodes ?? [];
             this.log.info(`Discovered ${nodes.length} nodes on Duco network`);
             for (const node of nodes) {
-                const nodeType = node.General?.Type?.Val ?? 'UNKNOWN';
-                const nodeName = node.General?.Name?.Val ?? `Node ${node.Node}`;
+                this.log.info(`Node ${node.Node} raw: Type=${JSON.stringify(node.General?.Type)}, Name=${JSON.stringify(node.General?.Name)}, SubType=${JSON.stringify(node.General?.SubType)}`);
+                const nodeType = node.General?.Type?.Val || 'UNKNOWN';
+                const nodeName = node.General?.Name?.Val || `Duco ${nodeType} ${node.Node}`;
                 const uuid = this.api.hap.uuid.generate(`duco-${this.config.host}-node-${node.Node}`);
                 // Check if already cached
                 const existingAccessory = this.accessories.find(a => a.UUID === uuid);
@@ -140,6 +141,7 @@ class DucoEnergyPlatform {
             this.log.error(`Failed to discover devices: ${err}`);
             // Start polling anyway to retry
             this.startPolling();
+            this.startDashboard();
         }
     }
     /**
@@ -199,6 +201,3 @@ class DucoEnergyPlatform {
     }
 }
 exports.DucoEnergyPlatform = DucoEnergyPlatform;
-exports.default = (api) => {
-    api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, DucoEnergyPlatform);
-};

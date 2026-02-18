@@ -98,7 +98,7 @@ export class DashboardServer {
   }
 
   start(): void {
-    this.server = this.app.listen(this.port, () => {
+    this.server = this.app.listen(this.port, '0.0.0.0', () => {
       this.log.info(`Duco Energy Dashboard running at http://localhost:${this.port}`);
     });
   }
@@ -158,39 +158,90 @@ export class DashboardServer {
     .cards {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
+      gap: 12px;
       margin-bottom: 24px;
     }
     .card {
       background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
+      border: 2px solid #30363d;
+      border-radius: 10px;
       padding: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
     }
-    .card h3 {
-      font-size: 14px;
-      color: #8b949e;
-      margin-bottom: 4px;
-      font-weight: 500;
+    .card:hover { border-color: #58a6ff; background: #1c2333; }
+    .card.selected {
+      border-color: #58a6ff;
+      background: #1c2333;
+      box-shadow: 0 0 0 1px #58a6ff, 0 0 20px rgba(88,166,255,0.15);
     }
-    .card .value {
-      font-size: 28px;
-      font-weight: 700;
+    .card .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .card .card-name {
+      font-size: 15px;
+      font-weight: 600;
       color: #e6edf3;
     }
-    .card .unit { font-size: 14px; color: #8b949e; margin-left: 4px; }
+    .card .card-type {
+      font-size: 11px;
+      color: #8b949e;
+      background: #21262d;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
     .card .state {
       display: inline-block;
       padding: 2px 10px;
       border-radius: 12px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
-      margin-top: 4px;
     }
     .state-auto { background: #238636; color: #fff; }
     .state-man1 { background: #1f6feb; color: #fff; }
     .state-man2 { background: #d29922; color: #000; }
     .state-man3 { background: #f85149; color: #fff; }
+    .card .sensor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .card .sensor-item {
+      text-align: center;
+    }
+    .card .sensor-label {
+      font-size: 10px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .card .sensor-val {
+      font-size: 22px;
+      font-weight: 700;
+      color: #e6edf3;
+      line-height: 1.2;
+    }
+    .card .sensor-val .unit {
+      font-size: 12px;
+      font-weight: 400;
+      color: #8b949e;
+    }
+    .card .selected-indicator {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #58a6ff;
+      display: none;
+    }
+    .card.selected .selected-indicator { display: block; }
     .chart-container {
       background: #161b22;
       border: 1px solid #30363d;
@@ -212,26 +263,6 @@ export class DashboardServer {
       .chart-row { grid-template-columns: 1fr; }
     }
     .loading { text-align: center; color: #8b949e; padding: 40px; }
-    .node-tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-    }
-    .node-tabs button {
-      padding: 8px 16px;
-      border: 1px solid #30363d;
-      background: #21262d;
-      color: #c9d1d9;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .node-tabs button.active {
-      background: #388bfd;
-      border-color: #388bfd;
-      color: #fff;
-    }
   </style>
 </head>
 <body>
@@ -249,8 +280,6 @@ export class DashboardServer {
   <div class="cards" id="liveCards">
     <div class="loading">Loading sensor data...</div>
   </div>
-
-  <div class="node-tabs" id="nodeTabs"></div>
 
   <div class="chart-row">
     <div class="chart-container">
@@ -442,47 +471,77 @@ export class DashboardServer {
         const resp = await fetch('/api/latest');
         const readings = await resp.json();
         const container = document.getElementById('liveCards');
-        const tabs = document.getElementById('nodeTabs');
 
         if (readings.length === 0) {
           container.innerHTML = '<div class="loading">No data yet. Waiting for sensor readings...</div>';
           return;
         }
 
-        container.innerHTML = readings.map(r => {
-          const stateClass = 'state-' + (r.ventilationState || 'auto').toLowerCase();
-          return '<div class="card">' +
-            '<h3>' + r.nodeName + ' (' + r.nodeType + ')</h3>' +
-            '<div><span class="state ' + stateClass + '">' + (r.ventilationState || 'N/A') + '</span></div>' +
-            '<div style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">' +
-            '<div><div style="color:#8b949e;font-size:11px">Humidity</div><div class="value" style="font-size:20px">' +
-              (r.rh || 0).toFixed(1) + '<span class="unit">%</span></div></div>' +
-            '<div><div style="color:#8b949e;font-size:11px">CO₂</div><div class="value" style="font-size:20px">' +
-              (r.co2 || 0) + '<span class="unit">ppm</span></div></div>' +
-            '<div><div style="color:#8b949e;font-size:11px">IAQ RH</div><div class="value" style="font-size:20px">' +
-              (r.iaqRh || 0) + '</div></div>' +
-            '<div><div style="color:#8b949e;font-size:11px">IAQ CO₂</div><div class="value" style="font-size:20px">' +
-              (r.iaqCo2 || 0) + '</div></div>' +
-            '<div><div style="color:#8b949e;font-size:11px">Flow Target</div><div class="value" style="font-size:20px">' +
-              (r.flowLvlTgt || 0) + '</div></div>' +
-            '<div><div style="color:#8b949e;font-size:11px">Time Remain</div><div class="value" style="font-size:20px">' +
-              (r.timeStateRemain || 0) + '<span class="unit">s</span></div></div>' +
-            '</div></div>';
-        }).join('');
-
-        // Build node tabs
         if (!selectedNodeId && readings.length > 0) {
           selectedNodeId = readings[0].nodeId;
         }
-        tabs.innerHTML = readings.map(r => {
-          const active = r.nodeId === selectedNodeId ? ' active' : '';
-          return '<button class="' + active + '" onclick="selectNode(' + r.nodeId + ')">' +
-            r.nodeName + '</button>';
+
+        container.innerHTML = readings.map(r => {
+          const stateClass = 'state-' + (r.ventilationState || 'auto').toLowerCase();
+          const selected = r.nodeId === selectedNodeId ? ' selected' : '';
+          return '<div class="card' + selected + '" onclick="selectNode(' + r.nodeId + ')">' +
+            '<div class="selected-indicator"></div>' +
+            '<div class="card-header">' +
+              '<span class="card-name">' + (r.nodeName || 'Node ' + r.nodeId) + '</span>' +
+              '<span class="card-type">' + (r.nodeType || '?') + '</span>' +
+            '</div>' +
+            '<div><span class="state ' + stateClass + '">' + (r.ventilationState || 'N/A') + '</span></div>' +
+            '<div class="sensor-grid">' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">Humidity</div>' +
+                '<div class="sensor-val">' + (r.rh || 0).toFixed(1) + '<span class="unit">%</span></div>' +
+              '</div>' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">CO₂</div>' +
+                '<div class="sensor-val">' + (r.co2 || 0) + '<span class="unit">ppm</span></div>' +
+              '</div>' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">Flow</div>' +
+                '<div class="sensor-val">' + (r.flowLvlTgt || 0) + '<span class="unit">%</span></div>' +
+              '</div>' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">IAQ RH</div>' +
+                '<div class="sensor-val">' + (r.iaqRh || 0) + '</div>' +
+              '</div>' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">IAQ CO₂</div>' +
+                '<div class="sensor-val">' + (r.iaqCo2 || 0) + '</div>' +
+              '</div>' +
+              '<div class="sensor-item">' +
+                '<div class="sensor-label">Timer</div>' +
+                '<div class="sensor-val">' + formatTimer(r.timeStateRemain || 0) + '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
         }).join('');
 
       } catch (err) {
         console.error('Failed to load live data:', err);
       }
+    }
+
+    function formatTimer(seconds) {
+      if (!seconds || seconds <= 0) return '--';
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return m + '<span class="unit">m</span>' + (s > 0 ? s + '<span class="unit">s</span>' : '');
+    }
+
+    function selectNode(nodeId) {
+      selectedNodeId = nodeId;
+      document.querySelectorAll('.card').forEach(card => {
+        const onclick = card.getAttribute('onclick') || '';
+        const match = onclick.match(/\\d+/);
+        if (match) {
+          card.classList.toggle('selected', parseInt(match[0]) === nodeId);
+        }
+      });
+      refreshCharts();
     }
 
     async function refreshCharts() {
@@ -495,15 +554,6 @@ export class DashboardServer {
         updateChart(charts.flow, selectedNodeId, 'flow_lvl_tgt'),
         updateTimeline(selectedNodeId),
       ]);
-    }
-
-    function selectNode(nodeId) {
-      selectedNodeId = nodeId;
-      document.querySelectorAll('.node-tabs button').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent && parseInt(btn.getAttribute('onclick').match(/\\d+/)?.[0]) === nodeId);
-      });
-      // Re-render tabs properly
-      loadLiveData().then(refreshCharts);
     }
 
     function setRange(range) {
