@@ -19,6 +19,14 @@ class DucoApiClient {
         });
     }
     /**
+     * Get system info including temperatures and filter status
+     * This is the /info endpoint (not /info/nodes)
+     */
+    async getSystemInfo() {
+        const response = await this.client.get('/info');
+        return response.data;
+    }
+    /**
      * Get API info / health check
      */
     async getApiInfo() {

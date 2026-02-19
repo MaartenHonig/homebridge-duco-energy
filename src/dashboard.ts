@@ -5,18 +5,22 @@ import { Logger } from 'homebridge';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { DucoApiClient } from './ducoApi';
+
 export class DashboardServer {
   private app: express.Application;
   private server: Server | null = null;
   private dataLogger: DataLogger;
+  private apiClient: DucoApiClient;
   private log: Logger;
   private port: number;
   private dashboardHtml: string;
 
-  constructor(dataLogger: DataLogger, log: Logger, port: number) {
+  constructor(dataLogger: DataLogger, log: Logger, port: number, apiClient: DucoApiClient) {
     this.dataLogger = dataLogger;
     this.log = log;
     this.port = port;
+    this.apiClient = apiClient;
     this.app = express();
 
     // Load HTML at startup
@@ -40,6 +44,32 @@ export class DashboardServer {
     this.app.get('/api/latest', async (_req: Request, res: Response) => {
       try { res.json(await this.dataLogger.getLatestReadings()); }
       catch { res.status(500).json({ error: 'Failed' }); }
+    });
+
+    this.app.get('/api/temps/latest', async (_req: Request, res: Response) => {
+      try { res.json(await this.dataLogger.getLatestSystemTemps()); }
+      catch { res.status(500).json({ error: 'Failed' }); }
+    });
+
+    this.app.get('/api/temps/chart/:field', async (req: Request, res: Response) => {
+      try {
+        const field = req.params.field;
+        const range = (req.query.range as string) || '24h';
+        const now = Math.floor(Date.now() / 1000);
+        const from = this.rangeToFrom(range, now);
+        res.json(await this.dataLogger.getSystemTempsChart(field, from, now));
+      } catch { res.status(500).json({ error: 'Failed' }); }
+    });
+
+    this.app.get('/api/sysinfo', async (_req: Request, res: Response) => {
+      try {
+        if (this.apiClient) {
+          const info = await this.apiClient.getSystemInfo();
+          res.json(info);
+        } else {
+          res.status(503).json({ error: 'API client not available' });
+        }
+      } catch { res.status(500).json({ error: 'Failed' }); }
     });
 
     this.app.get('/api/chart/:nodeId/:field', async (req: Request, res: Response) => {

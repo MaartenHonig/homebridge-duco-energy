@@ -65,6 +65,39 @@ export interface DucoNodeActionsResponse {
   Actions: DucoActionItem[];
 }
 
+export interface DucoSystemInfo {
+  General?: {
+    Board?: {
+      BoxName?: { Val: string };
+      BoxSubTypeName?: { Val: string };
+      SerialBoardBox?: { Val: string };
+      SerialBoardComm?: { Val: string };
+      SerialDucoBox?: { Val: string };
+      Time?: { Val: number };
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  Ventilation?: {
+    Sensor?: {
+      TempOda?: { Val: number };  // Outdoor air (x10 °C)
+      TempSup?: { Val: number };  // Supply air (x10 °C)
+      TempEta?: { Val: number };  // Extract air (x10 °C)
+      TempEha?: { Val: number };  // Exhaust air (x10 °C)
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  HeatRecovery?: {
+    General?: {
+      TimeFilterRemain?: { Val: number };  // days
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 // ─── API Client ─────────────────────────────────────────────────────────────
 
 export class DucoApiClient {
@@ -81,6 +114,15 @@ export class DucoApiClient {
         'Content-Type': 'application/json',
       },
     });
+  }
+
+  /**
+   * Get system info including temperatures and filter status
+   * This is the /info endpoint (not /info/nodes)
+   */
+  async getSystemInfo(): Promise<DucoSystemInfo> {
+    const response = await this.client.get('/info');
+    return response.data;
   }
 
   /**

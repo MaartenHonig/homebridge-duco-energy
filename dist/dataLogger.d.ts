@@ -13,6 +13,13 @@ export interface SensorReading {
     co2: number;
     rh: number;
 }
+export interface SystemTemps {
+    tempOda: number;
+    tempSup: number;
+    tempEta: number;
+    tempEha: number;
+    filterDaysRemain: number;
+}
 export interface ChartDataPoint {
     timestamp: number;
     value: number;
@@ -40,6 +47,9 @@ export declare class DataLogger {
         nodeName: string;
         nodeType: string;
     }[]>;
+    logSystemTemps(temps: SystemTemps): Promise<void>;
+    getSystemTempsChart(field: string, fromTimestamp: number, toTimestamp: number): Promise<ChartDataPoint[]>;
+    getLatestSystemTemps(): Promise<SystemTemps | null>;
     cleanup(): Promise<void>;
     close(): void;
 }

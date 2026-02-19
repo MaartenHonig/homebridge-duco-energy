@@ -85,10 +85,69 @@ export interface DucoNodeActionsResponse {
     Node: number;
     Actions: DucoActionItem[];
 }
+export interface DucoSystemInfo {
+    General?: {
+        Board?: {
+            BoxName?: {
+                Val: string;
+            };
+            BoxSubTypeName?: {
+                Val: string;
+            };
+            SerialBoardBox?: {
+                Val: string;
+            };
+            SerialBoardComm?: {
+                Val: string;
+            };
+            SerialDucoBox?: {
+                Val: string;
+            };
+            Time?: {
+                Val: number;
+            };
+            [key: string]: unknown;
+        };
+        [key: string]: unknown;
+    };
+    Ventilation?: {
+        Sensor?: {
+            TempOda?: {
+                Val: number;
+            };
+            TempSup?: {
+                Val: number;
+            };
+            TempEta?: {
+                Val: number;
+            };
+            TempEha?: {
+                Val: number;
+            };
+            [key: string]: unknown;
+        };
+        [key: string]: unknown;
+    };
+    HeatRecovery?: {
+        General?: {
+            TimeFilterRemain?: {
+                Val: number;
+            };
+            [key: string]: unknown;
+        };
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
+}
 export declare class DucoApiClient {
     private client;
     private baseUrl;
     constructor(host: string);
+    /**
+     * Get system info including temperatures and filter status
+     * This is the /info endpoint (not /info/nodes)
+     */
+    getSystemInfo(): Promise<DucoSystemInfo>;
     /**
      * Get API info / health check
      */

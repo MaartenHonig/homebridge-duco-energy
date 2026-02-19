@@ -41,11 +41,12 @@ const express_1 = __importDefault(require("express"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 class DashboardServer {
-    constructor(dataLogger, log, port) {
+    constructor(dataLogger, log, port, apiClient) {
         this.server = null;
         this.dataLogger = dataLogger;
         this.log = log;
         this.port = port;
+        this.apiClient = apiClient;
         this.app = (0, express_1.default)();
         // Load HTML at startup
         const htmlPath = path.join(__dirname, 'dashboard.html');
@@ -70,6 +71,40 @@ class DashboardServer {
         this.app.get('/api/latest', async (_req, res) => {
             try {
                 res.json(await this.dataLogger.getLatestReadings());
+            }
+            catch {
+                res.status(500).json({ error: 'Failed' });
+            }
+        });
+        this.app.get('/api/temps/latest', async (_req, res) => {
+            try {
+                res.json(await this.dataLogger.getLatestSystemTemps());
+            }
+            catch {
+                res.status(500).json({ error: 'Failed' });
+            }
+        });
+        this.app.get('/api/temps/chart/:field', async (req, res) => {
+            try {
+                const field = req.params.field;
+                const range = req.query.range || '24h';
+                const now = Math.floor(Date.now() / 1000);
+                const from = this.rangeToFrom(range, now);
+                res.json(await this.dataLogger.getSystemTempsChart(field, from, now));
+            }
+            catch {
+                res.status(500).json({ error: 'Failed' });
+            }
+        });
+        this.app.get('/api/sysinfo', async (_req, res) => {
+            try {
+                if (this.apiClient) {
+                    const info = await this.apiClient.getSystemInfo();
+                    res.json(info);
+                }
+                else {
+                    res.status(503).json({ error: 'API client not available' });
+                }
             }
             catch {
                 res.status(500).json({ error: 'Failed' });

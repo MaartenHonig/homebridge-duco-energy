@@ -49,6 +49,19 @@ class DataLogger {
         this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON sensor_readings(timestamp)');
         this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_id ON sensor_readings(node_id)');
         this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_timestamp ON sensor_readings(node_id, timestamp)');
+        // System-level temperatures from /info endpoint
+        this.db.run(`
+      CREATE TABLE IF NOT EXISTS system_temps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        temp_oda REAL DEFAULT 0,
+        temp_sup REAL DEFAULT 0,
+        temp_eta REAL DEFAULT 0,
+        temp_eha REAL DEFAULT 0,
+        filter_days_remain INTEGER DEFAULT 0
+      )
+    `);
+        this.db.run('CREATE INDEX IF NOT EXISTS idx_temps_timestamp ON system_temps(timestamp)');
         this.saveTimer = setInterval(() => this.saveToDisk(), 60000);
     }
     saveToDisk() {
@@ -180,12 +193,57 @@ class DataLogger {
         stmt.free();
         return results;
     }
+    async logSystemTemps(temps) {
+        await this.ready;
+        if (!this.db)
+            return;
+        const timestamp = Math.floor(Date.now() / 1000);
+        this.db.run(`INSERT INTO system_temps (timestamp, temp_oda, temp_sup, temp_eta, temp_eha, filter_days_remain)
+       VALUES (?, ?, ?, ?, ?, ?)`, [timestamp, temps.tempOda, temps.tempSup, temps.tempEta, temps.tempEha, temps.filterDaysRemain]);
+        this.dirty = true;
+    }
+    async getSystemTempsChart(field, fromTimestamp, toTimestamp) {
+        await this.ready;
+        if (!this.db)
+            return [];
+        const validFields = ['temp_oda', 'temp_sup', 'temp_eta', 'temp_eha', 'filter_days_remain'];
+        if (!validFields.includes(field)) {
+            throw new Error(`Invalid field: ${field}`);
+        }
+        const results = [];
+        const stmt = this.db.prepare(`SELECT timestamp, ${field} as value
+       FROM system_temps
+       WHERE timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`);
+        stmt.bind([fromTimestamp, toTimestamp]);
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            results.push({ timestamp: row.timestamp, value: row.value });
+        }
+        stmt.free();
+        return results;
+    }
+    async getLatestSystemTemps() {
+        await this.ready;
+        if (!this.db)
+            return null;
+        const stmt = this.db.prepare(`SELECT temp_oda as tempOda, temp_sup as tempSup, temp_eta as tempEta,
+              temp_eha as tempEha, filter_days_remain as filterDaysRemain
+       FROM system_temps ORDER BY timestamp DESC LIMIT 1`);
+        let result = null;
+        if (stmt.step()) {
+            result = stmt.getAsObject();
+        }
+        stmt.free();
+        return result;
+    }
     async cleanup() {
         await this.ready;
         if (!this.db)
             return;
         const cutoff = Math.floor(Date.now() / 1000) - this.retentionDays * 86400;
         this.db.run('DELETE FROM sensor_readings WHERE timestamp < ?', [cutoff]);
+        this.db.run('DELETE FROM system_temps WHERE timestamp < ?', [cutoff]);
         this.dirty = true;
         this.saveToDisk();
     }

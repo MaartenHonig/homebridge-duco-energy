@@ -165,6 +165,29 @@ class DucoEnergyPlatform {
                 }
                 // Log to database
                 this.dataLogger.logNodes(nodes);
+                // Fetch system info (temperatures) from /info endpoint
+                try {
+                    const sysInfo = await this.apiClient.getSystemInfo();
+                    const ventSensor = sysInfo.Ventilation?.Sensor;
+                    const filterRemain = sysInfo.HeatRecovery?.General?.TimeFilterRemain?.Val ?? 0;
+                    if (ventSensor) {
+                        const temps = {
+                            tempOda: (ventSensor.TempOda?.Val ?? 0) / 10,
+                            tempSup: (ventSensor.TempSup?.Val ?? 0) / 10,
+                            tempEta: (ventSensor.TempEta?.Val ?? 0) / 10,
+                            tempEha: (ventSensor.TempEha?.Val ?? 0) / 10,
+                            filterDaysRemain: filterRemain,
+                        };
+                        this.dataLogger.logSystemTemps(temps);
+                        // Update temperature accessory if exists
+                        for (const boxAcc of this.boxAccessories.values()) {
+                            boxAcc.updateTemperatures(temps);
+                        }
+                    }
+                }
+                catch (err) {
+                    this.log.debug(`System info fetch failed (temps): ${err}`);
+                }
             }
             catch (err) {
                 this.log.warn(`Poll failed: ${err}`);
@@ -184,7 +207,7 @@ class DucoEnergyPlatform {
             return;
         }
         const port = this.config.dashboardPort ?? 9100;
-        this.dashboard = new dashboard_1.DashboardServer(this.dataLogger, this.log, port);
+        this.dashboard = new dashboard_1.DashboardServer(this.dataLogger, this.log, port, this.apiClient);
         this.dashboard.start();
     }
     /**

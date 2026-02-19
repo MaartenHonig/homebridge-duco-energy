@@ -9,13 +9,20 @@ class DucoBoxAccessory {
         this.modes = [];
         this.currentState = 'AUTO';
         this.currentFlow = 0;
+        // Flow levels learned from observed poll data
+        this.learnedFlowLevels = {};
         this.nodeId = nodeId;
+        // Restore learned flow levels from accessory context (persisted across restarts)
+        if (this.accessory.context.learnedFlowLevels) {
+            this.learnedFlowLevels = this.accessory.context.learnedFlowLevels;
+            this.log.info(`Restored learned flow levels: ${JSON.stringify(this.learnedFlowLevels)}`);
+        }
         // Accessory info
         this.accessory.getService(this.platform.Service.AccessoryInformation)
             .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Duco')
             .setCharacteristic(this.platform.Characteristic.Model, 'DucoBox Energy')
             .setCharacteristic(this.platform.Characteristic.SerialNumber, `DUCO-BOX-${nodeId}`);
-        // ─── Remove old Lightbulb service from previous version ───────
+        // ─── Remove old services from previous versions ───────────────
         const oldLightbulb = this.accessory.getServiceById(this.platform.Service.Lightbulb, 'duco-flow');
         if (oldLightbulb) {
             this.log.info('Removing old Lightbulb flow service (migrated to Fan)');
@@ -34,7 +41,6 @@ class DucoBoxAccessory {
         this.flowService.getCharacteristic(this.platform.Characteristic.Active)
             .onGet(() => this.platform.Characteristic.Active.ACTIVE)
             .onSet(() => {
-            // Ignore off — snap back to active
             this.flowService.updateCharacteristic(this.platform.Characteristic.Active, this.platform.Characteristic.Active.ACTIVE);
         });
         // RotationSpeed = flow % from API. Dragging does nothing — snaps back.
@@ -42,9 +48,13 @@ class DucoBoxAccessory {
             .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
             .onGet(() => this.currentFlow)
             .onSet(() => {
-            // Ignore user drag — snap back to real value
             this.flowService.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.currentFlow);
         });
+        // ─── Temperature sensors ──────────────────────────────────────
+        this.tempOdaService = this.getOrAddTempSensor('Outdoor', 'temp-oda');
+        this.tempSupService = this.getOrAddTempSensor('Supply', 'temp-sup');
+        this.tempEtaService = this.getOrAddTempSensor('Extract', 'temp-eta');
+        this.tempEhaService = this.getOrAddTempSensor('Exhaust', 'temp-eha');
         // ─── 4 Mode switches ─────────────────────────────────────────
         const modeDefinitions = [
             { name: 'Duco Auto', state: 'AUTO', subtype: 'duco-auto' },
@@ -65,16 +75,12 @@ class DucoBoxAccessory {
             if (!service) {
                 service = this.accessory.addService(this.platform.Service.Switch, def.name, def.subtype);
             }
-            // Set the display name clearly
             service.setCharacteristic(this.platform.Characteristic.Name, def.name);
             service.displayName = def.name;
-            // Try to set ConfiguredName if available (iOS 15+)
             try {
                 service.setCharacteristic(this.platform.Characteristic.ConfiguredName, def.name);
             }
-            catch {
-                // ConfiguredName not available on older HAP versions
-            }
+            catch { /* older HAP */ }
             const mode = {
                 name: def.name,
                 state: def.state,
@@ -87,7 +93,6 @@ class DucoBoxAccessory {
                     this.setVentilationState(def.state);
                 }
                 else {
-                    // Turning off the active mode → go to AUTO
                     if (this.currentState === def.state) {
                         this.setVentilationState('AUTO');
                     }
@@ -96,6 +101,23 @@ class DucoBoxAccessory {
             this.modes.push(mode);
         }
     }
+    getOrAddTempSensor(name, subtype) {
+        const fullName = `Duco ${name}`;
+        let service = this.accessory.getServiceById(this.platform.Service.TemperatureSensor, subtype);
+        if (!service) {
+            service = this.accessory.addService(this.platform.Service.TemperatureSensor, fullName, subtype);
+        }
+        service.setCharacteristic(this.platform.Characteristic.Name, fullName);
+        service.displayName = fullName;
+        try {
+            service.setCharacteristic(this.platform.Characteristic.ConfiguredName, fullName);
+        }
+        catch { /* older HAP */ }
+        // Set reasonable range for ventilation temps
+        service.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+            .setProps({ minValue: -40, maxValue: 100 });
+        return service;
+    }
     setVentilationState(state) {
         if (state === this.currentState)
             return;
@@ -103,9 +125,13 @@ class DucoBoxAccessory {
         // Optimistic update — instantly update switches in HomeKit
         this.currentState = state;
         this.updateSwitchStates();
-        // Flow % is NOT guessed — it stays at current value until the next
-        // poll brings the real FlowLvlTgt from the API
-        // Fire API call in background — if it fails, next poll corrects state
+        // Optimistic flow update from learned levels
+        if (this.learnedFlowLevels[state] !== undefined) {
+            this.currentFlow = this.learnedFlowLevels[state];
+            this.flowService.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.currentFlow);
+            this.log.debug(`Optimistic flow for ${state}: ${this.currentFlow}%`);
+        }
+        // Fire API call in background
         this.platform.apiClient.setNodeVentilationState(this.nodeId, state)
             .catch((err) => {
             this.log.warn(`API call for ${state} failed — will correct on next poll: ${err}`);
@@ -119,6 +145,14 @@ class DucoBoxAccessory {
     updateFromNode(node) {
         const state = node.Ventilation?.State?.Val || 'AUTO';
         const flow = node.Ventilation?.FlowLvlTgt?.Val ?? 0;
+        // Learn flow level for this state
+        if (state !== 'AUTO' && flow > 0) {
+            if (this.learnedFlowLevels[state] !== flow) {
+                this.learnedFlowLevels[state] = flow;
+                this.accessory.context.learnedFlowLevels = this.learnedFlowLevels;
+                this.log.info(`Learned flow level: ${state} = ${flow}%`);
+            }
+        }
         if (state !== this.currentState) {
             this.currentState = state;
             this.updateSwitchStates();
@@ -127,6 +161,15 @@ class DucoBoxAccessory {
             this.currentFlow = flow;
             this.flowService.updateCharacteristic(this.platform.Characteristic.RotationSpeed, this.currentFlow);
         }
+    }
+    /**
+     * Update temperature sensors from system info poll
+     */
+    updateTemperatures(temps) {
+        this.tempOdaService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, temps.tempOda);
+        this.tempSupService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, temps.tempSup);
+        this.tempEtaService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, temps.tempEta);
+        this.tempEhaService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, temps.tempEha);
     }
 }
 exports.DucoBoxAccessory = DucoBoxAccessory;

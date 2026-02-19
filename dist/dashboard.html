@@ -49,12 +49,30 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #58a6ff; }
 @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
 .loading { text-align: center; color: #8b949e; padding: 40px; }
 #nodeCharts .chart-container { /* node-specific charts */ }
+
+/* Header row */
+.header-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+.header-left { flex: 1; }
+.sys-info { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; font-size: 12px; color: #8b949e; white-space: nowrap; }
+.sys-info .sys-name { font-size: 13px; font-weight: 600; color: #e6edf3; margin-bottom: 6px; }
+.sys-info .sys-row { display: flex; justify-content: space-between; gap: 16px; margin-top: 3px; }
+.sys-info .sys-val { color: #c9d1d9; font-weight: 500; }
+.wifi-good { color: #3fb950; }
+.wifi-ok { color: #d29922; }
+.wifi-bad { color: #f85149; }
 </style>
 </head>
 <body>
 
-<h1>&#x1F32C;&#xFE0F; Duco Energy Dashboard</h1>
-<p class="subtitle">Real-time ventilation monitoring &amp; sensor data</p>
+<div class="header-row">
+  <div class="header-left">
+    <h1>&#x1F32C;&#xFE0F; Duco Energy Dashboard</h1>
+    <p class="subtitle">Real-time ventilation monitoring &amp; sensor data</p>
+  </div>
+  <div class="sys-info" id="sysInfo">
+    <div class="sys-name">Loading...</div>
+  </div>
+</div>
 
 <div class="controls" id="rangeControls">
   <button onclick="setRange('1h')">1 Hour</button>
@@ -68,6 +86,12 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #58a6ff; }
 <div class="chart-container">
   <h2>&#x1F50D; System Overview</h2>
   <canvas id="chartMaster"></canvas>
+</div>
+
+<!-- Temperature chart -->
+<div class="chart-container">
+  <h2>&#x1F321;&#xFE0F; Temperatures</h2>
+  <canvas id="chartTemps"></canvas>
 </div>
 
 <div class="cards" id="liveCards"><div class="loading">Loading sensor data...</div></div>
@@ -171,6 +195,49 @@ async function updateMasterChart() {
   });
 
   charts.master.update("none");
+}
+
+// ─── TEMPERATURE CHART ───────────────────────────────────────────
+
+function createTempsChart() {
+  var ctx = document.getElementById("chartTemps").getContext("2d");
+  charts.temps = new Chart(ctx, {
+    type: "line",
+    data: { datasets: [
+      { label: "Outdoor", data: [], borderColor: "#58a6ff", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2 },
+      { label: "Supply", data: [], borderColor: "#3fb950", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2 },
+      { label: "Extract", data: [], borderColor: "#f0883e", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2 },
+      { label: "Exhaust", data: [], borderColor: "#f85149", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2 }
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
+      plugins: {
+        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: false, boxWidth: 20, boxHeight: 2, padding: 16, font: { size: 12 } } },
+        tooltip: { callbacks: { title: tooltipTitle, label: function(item) { return " " + item.dataset.label + ": " + item.parsed.y.toFixed(1) + " \u00B0C"; } } }
+      },
+      scales: {
+        x: xScaleBase(),
+        y: {
+          type: "linear", position: "left",
+          title: { display: true, text: "\u00B0C", color: "#c9d1d9" },
+          ticks: { color: "#8b949e" }, grid: { color: "#21262d" }
+        }
+      },
+      interaction: { intersect: false, mode: "index" }
+    }
+  });
+}
+
+async function updateTempsChart() {
+  var fields = ["temp_oda", "temp_sup", "temp_eta", "temp_eha"];
+  var fetches = fields.map(function(f) {
+    return fetch("/api/temps/chart/" + f + "?range=" + currentRange).then(function(r){return r.json();}).catch(function(){return [];});
+  });
+  var results = await Promise.all(fetches);
+  for (var i = 0; i < results.length; i++) {
+    charts.temps.data.datasets[i].data = results[i].map(function(d){ return {x:d.timestamp, y:d.value}; });
+  }
+  charts.temps.update("none");
 }
 
 // ─── NODE-SPECIFIC CHARTS ─────────────────────────────────────────
@@ -291,6 +358,8 @@ async function updateNodeCharts(nodeId, nodeType) {
 
 // ─── LIVE DATA & CARDS ────────────────────────────────────────────
 
+var latestTemps = null;
+
 function buildCard(r) {
   var sc = "state-" + (r.ventilationState || "auto").toLowerCase();
   var sel = r.nodeId === selectedNodeId ? " selected" : "";
@@ -298,11 +367,21 @@ function buildCard(r) {
 
   var content = "";
   if (type === "BOX") {
+    var tempRow = "";
+    if (latestTemps) {
+      tempRow =
+        '<div class="sensor-grid" style="grid-template-columns: 1fr 1fr 1fr 1fr; margin-top: 8px;">' +
+        '<div class="sensor-item"><div class="sensor-label">Outdoor</div><div class="sensor-val">' + latestTemps.tempOda.toFixed(1) + '<span class="unit">\u00B0C</span></div></div>' +
+        '<div class="sensor-item"><div class="sensor-label">Supply</div><div class="sensor-val">' + latestTemps.tempSup.toFixed(1) + '<span class="unit">\u00B0C</span></div></div>' +
+        '<div class="sensor-item"><div class="sensor-label">Extract</div><div class="sensor-val">' + latestTemps.tempEta.toFixed(1) + '<span class="unit">\u00B0C</span></div></div>' +
+        '<div class="sensor-item"><div class="sensor-label">Exhaust</div><div class="sensor-val">' + latestTemps.tempEha.toFixed(1) + '<span class="unit">\u00B0C</span></div></div>' +
+        '</div>';
+    }
     content =
       '<div class="sensor-grid" style="grid-template-columns: 1fr 1fr;">' +
       '<div class="sensor-item"><div class="sensor-label">Flow</div><div class="sensor-val">' + (r.flowLvlTgt || 0) + '<span class="unit">%</span></div></div>' +
       '<div class="sensor-item"><div class="sensor-label">State</div><div class="sensor-val" style="font-size:16px"><span class="state ' + sc + '">' + (r.ventilationState||"?") + '</span></div></div>' +
-      '</div>';
+      '</div>' + tempRow;
 
   } else if (type === "UCRH") {
     content =
@@ -331,6 +410,13 @@ async function loadLiveData() {
   try {
     var resp = await fetch("/api/latest");
     nodesData = await resp.json();
+
+    // Fetch latest temperatures
+    try {
+      var tempsResp = await fetch("/api/temps/latest");
+      latestTemps = await tempsResp.json();
+    } catch(e) { /* temps not available yet */ }
+
     var container = document.getElementById("liveCards");
     if (nodesData.length === 0) { container.innerHTML = '<div class="loading">No data yet...</div>'; return; }
     if (!selectedNodeId) {
@@ -362,10 +448,42 @@ function selectNode(nodeId) {
   updateNodeCharts(nodeId, selectedNodeType);
 }
 
+async function loadSysInfo() {
+  try {
+    var resp = await fetch("/api/sysinfo");
+    var info = await resp.json();
+    var el = document.getElementById("sysInfo");
+
+    var name = (info.General && info.General.Board && info.General.Board.BoxSubTypeName)
+      ? info.General.Board.BoxSubTypeName.Val : "DucoBox";
+
+    var rssi = (info.General && info.General.Lan && info.General.Lan.RssiWifi)
+      ? info.General.Lan.RssiWifi.Val : null;
+
+    var writeRemain = (info.General && info.General.PublicApi && info.General.PublicApi.WriteReqCntRemain)
+      ? info.General.PublicApi.WriteReqCntRemain.Val : null;
+
+    var wifiClass = "wifi-ok";
+    var wifiLabel = "?";
+    if (rssi !== null) {
+      wifiLabel = rssi + " dBm";
+      if (rssi > -50) wifiClass = "wifi-good";
+      else if (rssi > -70) wifiClass = "wifi-ok";
+      else wifiClass = "wifi-bad";
+    }
+
+    el.innerHTML =
+      '<div class="sys-name">' + name + '</div>' +
+      '<div class="sys-row"><span>WiFi</span><span class="sys-val ' + wifiClass + '">' + wifiLabel + '</span></div>' +
+      (writeRemain !== null ? '<div class="sys-row"><span>API writes</span><span class="sys-val">' + writeRemain + '</span></div>' : '');
+  } catch(e) { /* ignore */ }
+}
+
 async function refreshAll() {
   if (!selectedNodeId) return;
   await Promise.all([
     updateMasterChart(),
+    updateTempsChart(),
     updateNodeCharts(selectedNodeId, selectedNodeType)
   ]);
 }
@@ -381,14 +499,16 @@ function setRange(range) {
 
 async function init() {
   createMasterChart();
+  createTempsChart();
   await loadLiveData();
+  await loadSysInfo();
   // Set initial node type and build charts
   if (nodesData.length > 0) {
     selectedNodeType = nodesData[0].nodeType;
     buildNodeCharts(selectedNodeType);
   }
   await refreshAll();
-  setInterval(async function() { await loadLiveData(); await refreshAll(); }, 30000);
+  setInterval(async function() { await loadLiveData(); await loadSysInfo(); await refreshAll(); }, 30000);
 }
 
 init();
