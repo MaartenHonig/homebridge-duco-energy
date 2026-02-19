@@ -147,11 +147,23 @@ export class DucoBoxAccessory {
       service.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentState === def.state)
         .onSet((value: CharacteristicValue) => {
-          if (value) {
-            this.setVentilationState(def.state);
+          if (def.state === 'AUTO') {
+            // Auto switch: on = go to auto, off = ignore (you're already not in auto)
+            if (value) {
+              this.setVentilationState('AUTO', false);
+            }
           } else {
-            if (this.currentState === def.state) {
-              this.setVentilationState('AUTO');
+            // Manual mode switches:
+            if (value) {
+              // Tapping an inactive manual mode → switch to it
+              this.setVentilationState(def.state, false);
+            } else {
+              // Tapping an active manual mode (toggle off) → stack timer (+15 min)
+              if (this.currentState === def.state) {
+                this.setVentilationState(def.state, true);
+                // Keep the switch visually ON since we're stacking, not turning off
+                service.updateCharacteristic(this.platform.Characteristic.On, true);
+              }
             }
           }
         });
@@ -179,10 +191,14 @@ export class DucoBoxAccessory {
     return service;
   }
 
-  private setVentilationState(state: string): void {
-    if (state === this.currentState) return;
+  private setVentilationState(state: string, stack: boolean = false): void {
+    if (state === this.currentState && !stack) return;
 
-    this.log.info(`Setting ventilation to ${state} (node ${this.nodeId})`);
+    if (stack) {
+      this.log.info(`Stacking timer for ${state} (+15 min, node ${this.nodeId})`);
+    } else {
+      this.log.info(`Setting ventilation to ${state} (node ${this.nodeId})`);
+    }
 
     // Optimistic update — instantly update switches in HomeKit
     this.currentState = state;

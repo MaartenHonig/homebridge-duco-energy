@@ -106,6 +106,12 @@ var selectedNodeType = null;
 var charts = {};
 var nodesData = []; // latest readings cache
 
+function formatTimer(seconds) {
+  var m = Math.floor(seconds / 60);
+  var s = seconds % 60;
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
 var tooltipTitle = function(items) {
   if (!items.length) return "";
   var d = new Date(items[0].parsed.x * 1000);
@@ -380,7 +386,9 @@ function buildCard(r) {
     content =
       '<div class="sensor-grid" style="grid-template-columns: 1fr 1fr;">' +
       '<div class="sensor-item"><div class="sensor-label">Flow</div><div class="sensor-val">' + (r.flowLvlTgt || 0) + '<span class="unit">%</span></div></div>' +
-      '<div class="sensor-item"><div class="sensor-label">State</div><div class="sensor-val" style="font-size:16px"><span class="state ' + sc + '">' + (r.ventilationState||"?") + '</span></div></div>' +
+      '<div class="sensor-item"><div class="sensor-label">State</div><div class="sensor-val" style="font-size:16px"><span class="state ' + sc + '">' + (r.ventilationState||"?") + '</span>' +
+      (r.timeStateRemain > 0 ? '<div style="font-size:11px; color:#8b949e; margin-top:2px">' + formatTimer(r.timeStateRemain) + ' remaining</div>' : '') +
+      '</div></div>' +
       '</div>' + tempRow;
 
   } else if (type === "UCRH") {
