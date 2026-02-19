@@ -2,20 +2,18 @@ import { DucoNode } from './ducoApi';
 export interface SensorReading {
     timestamp: number;
     nodeId: number;
-    nodeName: string;
     nodeType: string;
-    ventilationState: string;
-    ventilationMode: string;
-    timeStateRemain: number;
-    flowLvlTgt: number;
-    iaqCo2: number;
-    iaqRh: number;
-    co2: number;
-    rh: number;
-}
-export interface ChartDataPoint {
-    timestamp: number;
-    value: number;
+    nodeName: string;
+    humidity: number | null;
+    temperature: number | null;
+    co2: number | null;
+    ventilationMode: string | null;
+    ventilationState: string | null;
+    fanSpeedSupply: number | null;
+    fanSpeedExhaust: number | null;
+    flowRateSupply: number | null;
+    flowRateExhaust: number | null;
+    timeStateRemain: number | null;
 }
 export declare class DataLogger {
     private db;
@@ -28,18 +26,15 @@ export declare class DataLogger {
     private init;
     private saveToDisk;
     logNodes(nodes: DucoNode[]): Promise<void>;
-    getChartData(nodeId: number, field: string, fromTimestamp: number, toTimestamp: number): Promise<ChartDataPoint[]>;
-    getVentilationTimeline(nodeId: number, fromTimestamp: number, toTimestamp: number): Promise<{
-        timestamp: number;
-        state: string;
-        mode: string;
-    }[]>;
+    getReadings(nodeId: number, fromTimestamp: number, toTimestamp: number): Promise<SensorReading[]>;
     getLatestReadings(): Promise<SensorReading[]>;
-    getKnownNodes(): Promise<{
+    getKnownNodes(): Promise<Array<{
         nodeId: number;
-        nodeName: string;
         nodeType: string;
-    }[]>;
-    cleanup(): Promise<void>;
+        nodeName: string;
+    }>>;
+    getChartData(nodeId: number, fromTimestamp: number, toTimestamp: number, maxPoints?: number): Promise<SensorReading[]>;
+    purgeOldData(): Promise<number>;
+    private rowToReading;
     close(): void;
 }

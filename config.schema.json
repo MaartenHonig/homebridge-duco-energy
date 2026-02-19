@@ -1,24 +1,30 @@
 {
-  "pluginAlias": "DucoEnergy",
+  "pluginAlias": "DucoPlatform",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Control your Duco Energy ventilation system via the Connectivity Board 2.0 local API.",
-  "footerDisplay": "For help, see the [README](https://github.com/your-username/homebridge-duco-energy).",
+  "headerDisplay": "Connect your Duco ventilation system (DucoBox Energy, Focus, Silent) to Apple HomeKit via the Connectivity Board 2.0 local API.",
+  "footerDisplay": "After setup, a dashboard is available at http://[homebridge-ip]:8581 showing sensor graphs and ventilation history.",
   "schema": {
     "type": "object",
     "properties": {
       "name": {
-        "title": "Platform Name",
+        "title": "Plugin Name",
         "type": "string",
-        "default": "Duco Energy",
+        "default": "Duco Ventilation",
         "required": true
       },
       "host": {
         "title": "Duco Connectivity Board IP Address",
         "type": "string",
-        "placeholder": "192.168.1.100",
         "required": true,
-        "description": "The local IP address of your Duco Connectivity Board."
+        "placeholder": "192.168.1.100",
+        "description": "The IP address of your Duco Connectivity Board on your local network."
+      },
+      "port": {
+        "title": "Port",
+        "type": "integer",
+        "default": 80,
+        "description": "HTTP port of the Duco Connectivity Board (default: 80)."
       },
       "pollingInterval": {
         "title": "Polling Interval (seconds)",
@@ -26,29 +32,21 @@
         "default": 30,
         "minimum": 10,
         "maximum": 300,
-        "description": "How often to poll the Duco API for sensor data updates."
-      },
-      "overrideDurationMinutes": {
-        "title": "Manual Override Duration (minutes)",
-        "type": "integer",
-        "default": 15,
-        "minimum": 5,
-        "maximum": 120,
-        "description": "Duration of each manual speed override in minutes. Like pressing the button once on the physical controller."
+        "description": "How often to poll the Duco for sensor updates. Lower = more responsive but more network traffic."
       },
       "dashboardPort": {
-        "title": "Dashboard Web Port",
+        "title": "Dashboard Port",
         "type": "integer",
-        "default": 9100,
-        "minimum": 1024,
-        "maximum": 65535,
-        "description": "Port for the sensor data dashboard. Access at http://<homebridge-ip>:<port>"
+        "default": 8581,
+        "description": "Port for the sensor graphs dashboard web interface."
       },
-      "enableDashboard": {
-        "title": "Enable Dashboard",
-        "type": "boolean",
-        "default": true,
-        "description": "Enable the built-in web dashboard with sensor graphs."
+      "boostDurationMinutes": {
+        "title": "Boost Duration (minutes)",
+        "type": "integer",
+        "default": 45,
+        "minimum": 5,
+        "maximum": 240,
+        "description": "How long the Boost switch keeps ventilation on medium speed (default: 45 min = 3×15 min)."
       },
       "dataRetentionDays": {
         "title": "Data Retention (days)",
@@ -56,8 +54,10 @@
         "default": 30,
         "minimum": 1,
         "maximum": 365,
-        "description": "How many days of sensor data to keep for the dashboard."
+        "description": "How many days of sensor history to keep for the dashboard graphs."
       }
     }
-  }
+  },
+  "form": null,
+  "display": null
 }

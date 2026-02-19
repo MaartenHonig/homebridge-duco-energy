@@ -1,141 +1,120 @@
-export interface DucoNodeGeneral {
-    Type: {
-        Val: string;
-    };
-    SubType: {
-        Val: number;
-    };
-    NetworkType: {
-        Val: string;
-    };
-    Parent: {
-        Val: number;
-    };
-    Asso: {
-        Val: number;
-    };
-    Name: {
-        Val: string;
-    };
-    Identify: {
-        Val: number;
-    };
-}
-export interface DucoNodeVentilation {
-    State: {
-        Val: string;
-    };
-    TimeStateRemain: {
-        Val: number;
-    };
-    TimeStateEnd: {
-        Val: number;
-    };
-    Mode: {
-        Val: string;
-    };
-    FlowLvlTgt: {
-        Val: number;
-    };
-}
-export interface DucoNodeSensor {
-    IaqCo2: {
-        Val: number;
-    };
-    IaqRh: {
-        Val: number;
-    };
-    Co2: {
-        Val: number;
-    };
-    Rh: {
-        Val: number;
-    };
-    [key: string]: {
-        Val: number | string;
-    } | undefined;
-}
 export interface DucoNode {
     Node: number;
-    General: DucoNodeGeneral;
-    Ventilation: DucoNodeVentilation;
-    Sensor: DucoNodeSensor;
+    General: {
+        Type?: string;
+        SubType?: string;
+        NetworkType?: string;
+        Ident?: string;
+        SwVersion?: string;
+        [key: string]: unknown;
+    };
+    Ventilation?: {
+        State?: string;
+        Mode?: string;
+        FlowLvlTgt?: number;
+        TimeStateRemain?: number;
+        TimeStateEnd?: number;
+        [key: string]: unknown;
+    };
+    Sensor?: {
+        RH?: number;
+        Temp?: number;
+        CO2?: number;
+        IaqCo2?: number;
+        IaqRh?: number;
+        [key: string]: unknown;
+    };
+    HeatRecovery?: {
+        Temp_Oda?: number;
+        Temp_Sup?: number;
+        Temp_Eta?: number;
+        Temp_Eha?: number;
+        BypassState?: string;
+        [key: string]: unknown;
+    };
+    Fan?: {
+        SpeedRpm_Sup?: number;
+        SpeedRpm_Eha?: number;
+        FlowRate_Sup?: number;
+        FlowRate_Eha?: number;
+        [key: string]: unknown;
+    };
+    Filter?: {
+        RemainingTime?: number;
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
 }
-export interface DucoDeviceInfo {
-    Id: string;
-    DeviceType: string;
-    SerialNumber: string;
-    Online: boolean;
-}
-export interface DucoNodesResponse {
-    DeviceInfo: DucoDeviceInfo;
+export interface DucoNodeInfo {
     Nodes: DucoNode[];
 }
-export interface DucoActionItem {
+export interface DucoAction {
     Action: string;
     ValType: string;
-    Enum: string[];
+    Enum?: string[];
 }
 export interface DucoActionsResponse {
-    DeviceInfo: DucoDeviceInfo;
-    Actions: DucoActionItem[];
+    Actions: DucoAction[];
 }
-export interface DucoNodeActionsResponse {
-    DeviceInfo: DucoDeviceInfo;
-    Node: number;
-    Actions: DucoActionItem[];
+export interface DucoSystemInfo {
+    General?: {
+        Type?: string;
+        SubType?: string;
+        BoardSerial?: string;
+        SwVersionBox?: string;
+        SwVersionCb?: string;
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
 }
 export declare class DucoApiClient {
     private client;
     private baseUrl;
-    constructor(host: string);
+    constructor(host: string, port?: number);
     /**
-     * Get API info / health check
+     * Get all node info — returns sensor readings, ventilation state, etc.
+     * This is the primary polling endpoint.
      */
-    getApiInfo(): Promise<Record<string, unknown>>;
-    /**
-     * Get all nodes with their current state and sensor data
-     */
-    getNodes(): Promise<DucoNodesResponse>;
+    getNodes(): Promise<DucoNode[]>;
     /**
      * Get info for a specific node
      */
-    getNodeInfo(nodeId: number): Promise<DucoNode>;
+    getNodeInfo(nodeId: number): Promise<DucoNode | null>;
     /**
-     * Get supported actions for the device
+     * Get system info (board serial, firmware versions, etc.)
      */
-    getActions(): Promise<DucoActionsResponse>;
+    getSystemInfo(): Promise<DucoSystemInfo>;
+    /**
+     * Get supported actions for the whole device
+     */
+    getActions(): Promise<DucoAction[]>;
     /**
      * Get supported actions for a specific node
      */
-    getNodeActions(nodeId: number): Promise<DucoNodeActionsResponse>;
+    getNodeActions(nodeId: number): Promise<DucoAction[]>;
     /**
-     * Send an action to the whole device (e.g., set ventilation mode)
+     * Send an action to the whole device (e.g. set ventilation mode)
      */
     sendAction(action: string, value: string | number | boolean): Promise<void>;
     /**
-     * Send an action to a specific node (e.g., override a specific zone)
+     * Send an action to a specific node
      */
     sendNodeAction(nodeId: number, action: string, value: string | number | boolean): Promise<void>;
     /**
-     * Get all config
-     */
-    getConfig(): Promise<Record<string, unknown>>;
-    /**
-     * Get config for a specific node
+     * Get configuration for a specific node
      */
     getNodeConfig(nodeId: number): Promise<Record<string, unknown>>;
     /**
-     * Set ventilation state for a node
-     * States: AUTO, MAN1, MAN2, MAN3, AWAY
+     * Check API health — useful for verifying connectivity
      */
-    setNodeVentilationState(nodeId: number, state: string): Promise<void>;
+    checkHealth(): Promise<boolean>;
     /**
-     * Set ventilation state for the whole box
+     * Attempt auto-discovery of API structure.
+     * The local API might vary slightly between firmware versions.
+     * This method tries common endpoint patterns and returns what works.
      */
-    setVentilationState(state: string): Promise<void>;
-    /**
-     * Test connectivity to the Duco box
-     */
-    testConnection(): Promise<boolean>;
+    discoverEndpoints(): Promise<{
+        infoEndpoint: string;
+        actionEndpoint: string;
+    }>;
 }

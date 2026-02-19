@@ -1,188 +1,258 @@
 import axios, { AxiosInstance } from 'axios';
 
-// ─── API Response Types ─────────────────────────────────────────────────────
-
-export interface DucoNodeGeneral {
-  Type: { Val: string };
-  SubType: { Val: number };
-  NetworkType: { Val: string };
-  Parent: { Val: number };
-  Asso: { Val: number };
-  Name: { Val: string };
-  Identify: { Val: number };
-}
-
-export interface DucoNodeVentilation {
-  State: { Val: string };
-  TimeStateRemain: { Val: number };
-  TimeStateEnd: { Val: number };
-  Mode: { Val: string };
-  FlowLvlTgt: { Val: number };
-}
-
-export interface DucoNodeSensor {
-  IaqCo2: { Val: number };
-  IaqRh: { Val: number };
-  Co2: { Val: number };
-  Rh: { Val: number };
-  // Allow additional sensor fields the API may return
-  [key: string]: { Val: number | string } | undefined;
-}
+// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface DucoNode {
   Node: number;
-  General: DucoNodeGeneral;
-  Ventilation: DucoNodeVentilation;
-  Sensor: DucoNodeSensor;
+  General: {
+    Type?: string;
+    SubType?: string;
+    NetworkType?: string;
+    Ident?: string;
+    SwVersion?: string;
+    [key: string]: unknown;
+  };
+  Ventilation?: {
+    State?: string;
+    Mode?: string;
+    FlowLvlTgt?: number;
+    TimeStateRemain?: number;
+    TimeStateEnd?: number;
+    [key: string]: unknown;
+  };
+  Sensor?: {
+    RH?: number;         // Relative humidity %
+    Temp?: number;        // Temperature °C (often x10)
+    CO2?: number;         // CO2 ppm
+    IaqCo2?: number;
+    IaqRh?: number;
+    [key: string]: unknown;
+  };
+  HeatRecovery?: {
+    Temp_Oda?: number;    // Outdoor air temperature
+    Temp_Sup?: number;    // Supply air temperature
+    Temp_Eta?: number;    // Extract air temperature
+    Temp_Eha?: number;    // Exhaust air temperature
+    BypassState?: string;
+    [key: string]: unknown;
+  };
+  Fan?: {
+    SpeedRpm_Sup?: number;
+    SpeedRpm_Eha?: number;
+    FlowRate_Sup?: number;
+    FlowRate_Eha?: number;
+    [key: string]: unknown;
+  };
+  Filter?: {
+    RemainingTime?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
-export interface DucoDeviceInfo {
-  Id: string;
-  DeviceType: string;
-  SerialNumber: string;
-  Online: boolean;
-}
-
-export interface DucoNodesResponse {
-  DeviceInfo: DucoDeviceInfo;
+export interface DucoNodeInfo {
   Nodes: DucoNode[];
 }
 
-export interface DucoActionItem {
+export interface DucoAction {
   Action: string;
   ValType: string;
-  Enum: string[];
+  Enum?: string[];
 }
 
 export interface DucoActionsResponse {
-  DeviceInfo: DucoDeviceInfo;
-  Actions: DucoActionItem[];
+  Actions: DucoAction[];
 }
 
-export interface DucoNodeActionsResponse {
-  DeviceInfo: DucoDeviceInfo;
-  Node: number;
-  Actions: DucoActionItem[];
+export interface DucoSystemInfo {
+  General?: {
+    Type?: string;
+    SubType?: string;
+    BoardSerial?: string;
+    SwVersionBox?: string;
+    SwVersionCb?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
-// ─── API Client ─────────────────────────────────────────────────────────────
+// ── API Client ───────────────────────────────────────────────────────────────
 
 export class DucoApiClient {
   private client: AxiosInstance;
   private baseUrl: string;
 
-  constructor(host: string) {
-    this.baseUrl = `http://${host}`;
+  constructor(host: string, port: number = 80) {
+    this.baseUrl = `http://${host}:${port}`;
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Accept': 'application/json' },
     });
   }
 
-  /**
-   * Get API info / health check
-   */
-  async getApiInfo(): Promise<Record<string, unknown>> {
-    const response = await this.client.get('/info');
-    return response.data;
-  }
+  // ── Info endpoints ──────────────────────────────────────────────────────
 
   /**
-   * Get all nodes with their current state and sensor data
+   * Get all node info — returns sensor readings, ventilation state, etc.
+   * This is the primary polling endpoint.
    */
-  async getNodes(): Promise<DucoNodesResponse> {
-    const response = await this.client.get('/info/nodes');
-    return response.data;
+  async getNodes(): Promise<DucoNode[]> {
+    try {
+      const resp = await this.client.get('/info/nodes');
+      // The API may return { Nodes: [...] } or just [...]
+      const data = resp.data;
+      if (data.Nodes) return data.Nodes;
+      if (Array.isArray(data)) return data;
+      // Fallback: try alternative endpoint structure
+      const resp2 = await this.client.get('/nodes');
+      const data2 = resp2.data;
+      if (data2.Nodes) return data2.Nodes;
+      if (Array.isArray(data2)) return data2;
+      return [];
+    } catch (err) {
+      throw new Error(`Failed to get nodes: ${(err as Error).message}`);
+    }
   }
 
   /**
    * Get info for a specific node
    */
-  async getNodeInfo(nodeId: number): Promise<DucoNode> {
-    const response = await this.client.get(`/info/nodes/${nodeId}`);
-    return response.data;
+  async getNodeInfo(nodeId: number): Promise<DucoNode | null> {
+    try {
+      const resp = await this.client.get(`/info/nodes/${nodeId}`);
+      return resp.data;
+    } catch (err) {
+      throw new Error(`Failed to get node ${nodeId}: ${(err as Error).message}`);
+    }
   }
 
   /**
-   * Get supported actions for the device
+   * Get system info (board serial, firmware versions, etc.)
    */
-  async getActions(): Promise<DucoActionsResponse> {
-    const response = await this.client.get('/action');
-    return response.data;
+  async getSystemInfo(): Promise<DucoSystemInfo> {
+    try {
+      const resp = await this.client.get('/info');
+      return resp.data;
+    } catch (err) {
+      throw new Error(`Failed to get system info: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Action endpoints ────────────────────────────────────────────────────
+
+  /**
+   * Get supported actions for the whole device
+   */
+  async getActions(): Promise<DucoAction[]> {
+    try {
+      const resp = await this.client.get('/action');
+      return resp.data.Actions || resp.data || [];
+    } catch (err) {
+      throw new Error(`Failed to get actions: ${(err as Error).message}`);
+    }
   }
 
   /**
    * Get supported actions for a specific node
    */
-  async getNodeActions(nodeId: number): Promise<DucoNodeActionsResponse> {
-    const response = await this.client.get(`/action/nodes/${nodeId}`);
-    return response.data;
+  async getNodeActions(nodeId: number): Promise<DucoAction[]> {
+    try {
+      const resp = await this.client.get(`/action/${nodeId}`);
+      return resp.data.Actions || resp.data || [];
+    } catch (err) {
+      throw new Error(`Failed to get node actions for ${nodeId}: ${(err as Error).message}`);
+    }
   }
 
   /**
-   * Send an action to the whole device (e.g., set ventilation mode)
+   * Send an action to the whole device (e.g. set ventilation mode)
    */
   async sendAction(action: string, value: string | number | boolean): Promise<void> {
-    await this.client.post('/action', {
-      Action: action,
-      Val: value,
-    });
+    try {
+      await this.client.post('/action', {
+        Action: action,
+        Val: value,
+      });
+    } catch (err) {
+      throw new Error(`Failed to send action ${action}: ${(err as Error).message}`);
+    }
   }
 
   /**
-   * Send an action to a specific node (e.g., override a specific zone)
+   * Send an action to a specific node
    */
   async sendNodeAction(nodeId: number, action: string, value: string | number | boolean): Promise<void> {
-    await this.client.post(`/action/nodes/${nodeId}`, {
-      Action: action,
-      Val: value,
-    });
+    try {
+      await this.client.post(`/action/${nodeId}`, {
+        Action: action,
+        Val: value,
+      });
+    } catch (err) {
+      throw new Error(`Failed to send action ${action} to node ${nodeId}: ${(err as Error).message}`);
+    }
   }
 
-  /**
-   * Get all config
-   */
-  async getConfig(): Promise<Record<string, unknown>> {
-    const response = await this.client.get('/config');
-    return response.data;
-  }
+  // ── Config endpoints ────────────────────────────────────────────────────
 
   /**
-   * Get config for a specific node
+   * Get configuration for a specific node
    */
   async getNodeConfig(nodeId: number): Promise<Record<string, unknown>> {
-    const response = await this.client.get(`/config/nodes/${nodeId}`);
-    return response.data;
-  }
-
-  /**
-   * Set ventilation state for a node
-   * States: AUTO, MAN1, MAN2, MAN3, AWAY
-   */
-  async setNodeVentilationState(nodeId: number, state: string): Promise<void> {
-    await this.sendNodeAction(nodeId, 'SetVentilationState', state);
-  }
-
-  /**
-   * Set ventilation state for the whole box
-   */
-  async setVentilationState(state: string): Promise<void> {
-    await this.sendAction('SetVentilationState', state);
-  }
-
-  /**
-   * Test connectivity to the Duco box
-   */
-  async testConnection(): Promise<boolean> {
     try {
-      await this.getApiInfo();
-      return true;
+      const resp = await this.client.get(`/config/nodes/${nodeId}`);
+      return resp.data;
+    } catch (err) {
+      throw new Error(`Failed to get config for node ${nodeId}: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Health ──────────────────────────────────────────────────────────────
+
+  /**
+   * Check API health — useful for verifying connectivity
+   */
+  async checkHealth(): Promise<boolean> {
+    try {
+      const resp = await this.client.get('/health');
+      return resp.status === 200;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Attempt auto-discovery of API structure.
+   * The local API might vary slightly between firmware versions.
+   * This method tries common endpoint patterns and returns what works.
+   */
+  async discoverEndpoints(): Promise<{ infoEndpoint: string; actionEndpoint: string }> {
+    const infoPaths = ['/info/nodes', '/nodes', '/info'];
+    const actionPaths = ['/action', '/actions'];
+
+    let infoEndpoint = '/info/nodes';
+    let actionEndpoint = '/action';
+
+    for (const path of infoPaths) {
+      try {
+        const resp = await this.client.get(path);
+        if (resp.status === 200 && resp.data) {
+          infoEndpoint = path;
+          break;
+        }
+      } catch { /* try next */ }
+    }
+
+    for (const path of actionPaths) {
+      try {
+        const resp = await this.client.get(path);
+        if (resp.status === 200) {
+          actionEndpoint = path;
+          break;
+        }
+      } catch { /* try next */ }
+    }
+
+    return { infoEndpoint, actionEndpoint };
   }
 }

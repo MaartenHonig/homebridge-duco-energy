@@ -1,203 +1,178 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DucoEnergyPlatform = void 0;
-const path_1 = __importDefault(require("path"));
+exports.DucoPlatform = void 0;
 const ducoApi_1 = require("./ducoApi");
 const dataLogger_1 = require("./dataLogger");
 const dashboard_1 = require("./dashboard");
-const ducoBoxAccessory_1 = require("./ducoBoxAccessory");
-const ducoSensorAccessory_1 = require("./ducoSensorAccessory");
-const PLATFORM_NAME = 'DucoEnergy';
-const PLUGIN_NAME = 'homebridge-duco-energy';
-class DucoEnergyPlatform {
-    constructor(log, config, api) {
+const ventilationAccessory_1 = require("./ventilationAccessory");
+const sensorAccessory_1 = require("./sensorAccessory");
+const PLUGIN_NAME = 'homebridge-duco';
+const PLATFORM_NAME = 'DucoPlatform';
+class DucoPlatform {
+    constructor(log, config, homebridgeApi) {
         this.log = log;
-        this.api = api;
-        this.Service = this.api.hap.Service;
-        this.Characteristic = this.api.hap.Characteristic;
-        this.dashboard = null;
+        this.homebridgeApi = homebridgeApi;
         this.accessories = [];
-        this.boxAccessories = new Map();
-        this.sensorAccessories = new Map();
+        this.discoveredAccessories = new Map();
         this.pollingTimer = null;
-        this.cleanupTimer = null;
+        this.purgeTimer = null;
         this.config = config;
+        this.Service = this.homebridgeApi.hap.Service;
+        this.Characteristic = this.homebridgeApi.hap.Characteristic;
         if (!this.config.host) {
-            this.log.error('No host configured! Please set the Duco Connectivity Board IP address.');
-            this.apiClient = new ducoApi_1.DucoApiClient('0.0.0.0');
-            this.dataLogger = new dataLogger_1.DataLogger(path_1.default.join(api.user.storagePath(), 'duco-energy.db'));
+            this.log.error('No Duco host configured! Please set "host" in the plugin config.');
             return;
         }
-        this.apiClient = new ducoApi_1.DucoApiClient(this.config.host);
-        // Initialize data logger
-        const dbPath = path_1.default.join(api.user.storagePath(), 'duco-energy.db');
-        const retentionDays = this.config.dataRetentionDays ?? 30;
-        this.dataLogger = new dataLogger_1.DataLogger(dbPath, retentionDays);
-        this.log.info(`Duco Energy plugin initializing. Host: ${this.config.host}`);
-        // When Homebridge finishes loading cached accessories
-        this.api.on('didFinishLaunching', () => {
-            this.log.info('Duco Energy: didFinishLaunching');
-            this.discoverDevices();
-        });
-        // Cleanup on shutdown
-        this.api.on('shutdown', () => {
-            this.log.info('Duco Energy: shutting down');
-            if (this.pollingTimer)
-                clearInterval(this.pollingTimer);
-            if (this.cleanupTimer)
-                clearInterval(this.cleanupTimer);
-            if (this.dashboard)
-                this.dashboard.stop();
-            this.dataLogger.close();
+        this.log.info('Duco plugin initializing for host:', this.config.host);
+        this.homebridgeApi.on('didFinishLaunching', () => {
+            this.initialize();
         });
     }
     /**
-     * Called by Homebridge for each cached accessory at startup
+     * Called by Homebridge to restore cached accessories
      */
     configureAccessory(accessory) {
-        this.log.info(`Loading cached accessory: ${accessory.displayName}`);
+        this.log.info('Restoring cached accessory:', accessory.displayName);
         this.accessories.push(accessory);
     }
     /**
-     * Discover Duco nodes and register accessories
+     * Main initialization — connect to Duco, discover nodes, start polling
+     */
+    async initialize() {
+        try {
+            // Set up API client
+            this.api = new ducoApi_1.DucoApiClient(this.config.host, this.config.port || 80);
+            // Test connectivity
+            const healthy = await this.api.checkHealth();
+            if (!healthy) {
+                this.log.warn('Duco health check failed — will retry. Make sure the Connectivity Board is reachable at', this.config.host);
+            }
+            // Set up data logger
+            const storagePath = this.homebridgeApi.user.storagePath();
+            this.dataLogger = new dataLogger_1.DataLogger(storagePath, this.config.dataRetentionDays || 30);
+            // Set up dashboard
+            this.dashboard = new dashboard_1.DashboardServer(this.dataLogger, this.log, this.config.dashboardPort || 8581);
+            this.dashboard.start();
+            // Discover and register accessories
+            await this.discoverDevices();
+            // Start polling
+            const interval = (this.config.pollingInterval || 30) * 1000;
+            this.pollingTimer = setInterval(() => this.pollSensors(), interval);
+            // Purge old data daily
+            this.purgeTimer = setInterval(async () => {
+                const purged = await this.dataLogger.purgeOldData();
+                if (purged > 0) {
+                    this.log.info(`Purged ${purged} old sensor readings`);
+                }
+            }, 24 * 60 * 60 * 1000);
+            this.log.info('Duco plugin initialized successfully');
+        }
+        catch (err) {
+            this.log.error('Failed to initialize Duco plugin:', err.message);
+        }
+    }
+    /**
+     * Discover all nodes on the Duco network and create accessories
      */
     async discoverDevices() {
         try {
-            // Test connection
-            const connected = await this.apiClient.testConnection();
-            if (!connected) {
-                this.log.error(`Cannot connect to Duco box at ${this.config.host}. Will retry on next poll.`);
-                this.startPolling();
-                return;
-            }
-            this.log.info('Connected to Duco box successfully!');
-            // Fetch all nodes
-            const response = await this.apiClient.getNodes();
-            const nodes = response.Nodes ?? [];
-            this.log.info(`Discovered ${nodes.length} nodes on Duco network`);
+            const nodes = await this.api.getNodes();
+            this.log.info(`Discovered ${nodes.length} Duco nodes`);
             for (const node of nodes) {
-                this.log.info(`Node ${node.Node} raw: Type=${JSON.stringify(node.General?.Type)}, Name=${JSON.stringify(node.General?.Name)}, SubType=${JSON.stringify(node.General?.SubType)}`);
-                const nodeType = node.General?.Type?.Val || 'UNKNOWN';
-                const nodeName = node.General?.Name?.Val || `Duco ${nodeType} ${node.Node}`;
-                const uuid = this.api.hap.uuid.generate(`duco-${this.config.host}-node-${node.Node}`);
-                // Check if already cached
+                const nodeType = node.General?.Type || 'UNKNOWN';
+                const nodeId = node.Node;
+                const uuid = this.homebridgeApi.hap.uuid.generate(`duco-${this.config.host}-${nodeId}`);
+                const displayName = node.General?.Ident || `Duco ${nodeType} ${nodeId}`;
+                this.log.info(`  Node ${nodeId}: ${nodeType} — "${displayName}"`);
+                // Check if accessory already exists
                 const existingAccessory = this.accessories.find(a => a.UUID === uuid);
-                if (nodeType === 'BOX') {
-                    // Main ventilation box → Fan accessory
+                if (nodeType === 'BOX' || nodeType === 'DUCOBOX') {
+                    // Main ventilation box — fan control
                     if (existingAccessory) {
-                        this.log.info(`Restoring BOX accessory: ${nodeName}`);
-                        const boxAcc = new ducoBoxAccessory_1.DucoBoxAccessory(this, existingAccessory, this.log, node.Node);
-                        this.boxAccessories.set(node.Node, boxAcc);
+                        this.log.info('  → Restoring ventilation accessory from cache');
+                        const accessory = new ventilationAccessory_1.DucoVentilationAccessory(this, existingAccessory, node, this.api, this.config);
+                        this.discoveredAccessories.set(uuid, accessory);
                     }
                     else {
-                        this.log.info(`Adding new BOX accessory: ${nodeName}`);
-                        const accessory = new this.api.platformAccessory(nodeName, uuid);
-                        accessory.context.nodeId = node.Node;
-                        accessory.context.nodeType = nodeType;
-                        const boxAcc = new ducoBoxAccessory_1.DucoBoxAccessory(this, accessory, this.log, node.Node);
-                        this.boxAccessories.set(node.Node, boxAcc);
-                        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-                        this.accessories.push(accessory);
+                        this.log.info('  → Creating new ventilation accessory');
+                        const accessory = new this.homebridgeApi.platformAccessory(displayName, uuid);
+                        accessory.context.node = node;
+                        const ducoAccessory = new ventilationAccessory_1.DucoVentilationAccessory(this, accessory, node, this.api, this.config);
+                        this.discoveredAccessories.set(uuid, ducoAccessory);
+                        this.homebridgeApi.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
                     }
                 }
-                else if (['BSRH', 'UCCO2', 'UCRH'].includes(nodeType)) {
-                    // Sensor nodes → Humidity + Air Quality + Motion (override indicator)
+                else if (nodeType === 'BSRH' || nodeType === 'UCCO2' || nodeType === 'UCRH' ||
+                    nodeType === 'SENSOR' || nodeType === 'UCBAT' ||
+                    nodeType.includes('SENSOR') || nodeType.includes('RH') || nodeType.includes('CO2')) {
+                    // Sensor node — humidity/temperature/CO2
                     if (existingAccessory) {
-                        this.log.info(`Restoring sensor accessory: ${nodeName} (${nodeType})`);
-                        const sensorAcc = new ducoSensorAccessory_1.DucoSensorAccessory(this, existingAccessory, this.log, node.Node, nodeName, nodeType);
-                        this.sensorAccessories.set(node.Node, sensorAcc);
+                        this.log.info('  → Restoring sensor accessory from cache');
+                        const accessory = new sensorAccessory_1.DucoSensorAccessory(this, existingAccessory, node);
+                        this.discoveredAccessories.set(uuid, accessory);
                     }
                     else {
-                        this.log.info(`Adding new sensor accessory: ${nodeName} (${nodeType})`);
-                        const accessory = new this.api.platformAccessory(`${nodeName}`, uuid);
-                        accessory.context.nodeId = node.Node;
-                        accessory.context.nodeType = nodeType;
-                        const sensorAcc = new ducoSensorAccessory_1.DucoSensorAccessory(this, accessory, this.log, node.Node, nodeName, nodeType);
-                        this.sensorAccessories.set(node.Node, sensorAcc);
-                        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-                        this.accessories.push(accessory);
+                        this.log.info('  → Creating new sensor accessory');
+                        const accessory = new this.homebridgeApi.platformAccessory(displayName, uuid);
+                        accessory.context.node = node;
+                        const ducoAccessory = new sensorAccessory_1.DucoSensorAccessory(this, accessory, node);
+                        this.discoveredAccessories.set(uuid, ducoAccessory);
+                        this.homebridgeApi.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
                     }
                 }
                 else {
-                    this.log.debug(`Skipping unsupported node type: ${nodeType} (${nodeName})`);
+                    // Other node types (valves, controllers, etc.) — register as sensor for monitoring
+                    this.log.info(`  → Node type "${nodeType}" — registering as generic sensor`);
+                    if (existingAccessory) {
+                        const accessory = new sensorAccessory_1.DucoSensorAccessory(this, existingAccessory, node);
+                        this.discoveredAccessories.set(uuid, accessory);
+                    }
+                    else {
+                        const accessory = new this.homebridgeApi.platformAccessory(displayName, uuid);
+                        accessory.context.node = node;
+                        const ducoAccessory = new sensorAccessory_1.DucoSensorAccessory(this, accessory, node);
+                        this.discoveredAccessories.set(uuid, ducoAccessory);
+                        this.homebridgeApi.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+                    }
                 }
             }
-            // Remove orphaned accessories
-            const activeUUIDs = nodes.map(n => this.api.hap.uuid.generate(`duco-${this.config.host}-node-${n.Node}`));
-            const orphans = this.accessories.filter(a => !activeUUIDs.includes(a.UUID));
-            if (orphans.length > 0) {
-                this.log.info(`Removing ${orphans.length} orphaned accessories`);
-                this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, orphans);
+            // Remove stale accessories that are no longer on the network
+            const discoveredUUIDs = new Set(this.discoveredAccessories.keys());
+            const staleAccessories = this.accessories.filter(a => !discoveredUUIDs.has(a.UUID));
+            if (staleAccessories.length > 0) {
+                this.log.info(`Removing ${staleAccessories.length} stale accessories`);
+                this.homebridgeApi.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, staleAccessories);
             }
-            // Start polling & dashboard
-            this.startPolling();
-            this.startDashboard();
-            this.startCleanupTimer();
         }
         catch (err) {
-            this.log.error(`Failed to discover devices: ${err}`);
-            // Start polling anyway to retry
-            this.startPolling();
-            this.startDashboard();
+            this.log.error('Failed to discover Duco devices:', err.message);
+            this.log.error('Will retry on next poll cycle');
         }
     }
     /**
-     * Poll the Duco API at regular intervals
+     * Poll all node sensor data and update accessories + data logger
      */
-    startPolling() {
-        const interval = (this.config.pollingInterval ?? 30) * 1000;
-        this.log.info(`Starting polling every ${interval / 1000}s`);
-        const poll = async () => {
-            try {
-                const response = await this.apiClient.getNodes();
-                const nodes = response.Nodes ?? [];
-                // Update accessories
-                for (const node of nodes) {
-                    const boxAcc = this.boxAccessories.get(node.Node);
-                    if (boxAcc)
-                        boxAcc.updateFromNode(node);
-                    const sensorAcc = this.sensorAccessories.get(node.Node);
-                    if (sensorAcc)
-                        sensorAcc.updateFromNode(node);
+    async pollSensors() {
+        try {
+            const nodes = await this.api.getNodes();
+            // Log to database for dashboard
+            this.dataLogger.logNodes(nodes);
+            // Update each accessory with fresh data
+            for (const node of nodes) {
+                const uuid = this.homebridgeApi.hap.uuid.generate(`duco-${this.config.host}-${node.Node}`);
+                const accessory = this.discoveredAccessories.get(uuid);
+                if (accessory) {
+                    accessory.updateFromNode(node);
                 }
-                // Log to database
-                this.dataLogger.logNodes(nodes);
             }
-            catch (err) {
-                this.log.warn(`Poll failed: ${err}`);
-            }
-        };
-        // Initial poll
-        poll();
-        // Regular interval
-        this.pollingTimer = setInterval(poll, interval);
-    }
-    /**
-     * Start the web dashboard
-     */
-    startDashboard() {
-        if (this.config.enableDashboard === false) {
-            this.log.info('Dashboard disabled in config');
-            return;
         }
-        const port = this.config.dashboardPort ?? 9100;
-        this.dashboard = new dashboard_1.DashboardServer(this.dataLogger, this.log, port);
-        this.dashboard.start();
-    }
-    /**
-     * Periodically clean up old data
-     */
-    startCleanupTimer() {
-        // Run cleanup once a day
-        this.cleanupTimer = setInterval(() => {
-            this.log.info('Running data cleanup...');
-            this.dataLogger.cleanup();
-        }, 86400000);
-        // Also run once at startup
-        this.dataLogger.cleanup();
+        catch (err) {
+            this.log.warn('Poll failed:', err.message);
+        }
     }
 }
-exports.DucoEnergyPlatform = DucoEnergyPlatform;
+exports.DucoPlatform = DucoPlatform;
+// ── Plugin registration ──────────────────────────────────────────────────────
+exports.default = (api) => {
+    api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, DucoPlatform);
+};
