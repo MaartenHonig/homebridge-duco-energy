@@ -56,8 +56,6 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #58a6ff; }
 <h1>&#x1F32C;&#xFE0F; Duco Energy Dashboard</h1>
 <p class="subtitle">Real-time ventilation monitoring &amp; sensor data</p>
 
-<div class="cards" id="liveCards"><div class="loading">Loading sensor data...</div></div>
-
 <div class="controls" id="rangeControls">
   <button onclick="setRange('1h')">1 Hour</button>
   <button onclick="setRange('6h')">6 Hours</button>
@@ -71,6 +69,8 @@ h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #58a6ff; }
   <h2>&#x1F50D; System Overview</h2>
   <canvas id="chartMaster"></canvas>
 </div>
+
+<div class="cards" id="liveCards"><div class="loading">Loading sensor data...</div></div>
 
 <!-- Node-specific charts: change based on selected node type -->
 <div id="nodeCharts"></div>
@@ -111,7 +111,7 @@ function createMasterChart() {
     options: {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
-        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: "line", padding: 16, font: { size: 12 } } },
+        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: false, boxWidth: 20, boxHeight: 2, padding: 16, font: { size: 12 } } },
         tooltip: { callbacks: { title: tooltipTitle } }
       },
       scales: {
