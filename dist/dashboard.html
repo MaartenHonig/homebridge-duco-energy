@@ -135,7 +135,7 @@ function createMasterChart() {
     options: {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
-        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: false, boxWidth: 20, boxHeight: 2, padding: 16, font: { size: 12 } } },
+        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 } } },
         tooltip: { callbacks: { title: tooltipTitle } }
       },
       scales: {
@@ -212,7 +212,7 @@ function createTempsChart() {
     options: {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
-        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: false, boxWidth: 20, boxHeight: 2, padding: 16, font: { size: 12 } } },
+        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 } } },
         tooltip: { callbacks: { title: tooltipTitle, label: function(item) { return " " + item.dataset.label + ": " + item.parsed.y.toFixed(1) + " \u00B0C"; } } }
       },
       scales: {
