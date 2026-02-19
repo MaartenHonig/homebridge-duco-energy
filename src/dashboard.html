@@ -136,7 +136,7 @@ function createMasterChart() {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
         legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 } } },
-        tooltip: { callbacks: { title: tooltipTitle } }
+        tooltip: { boxWidth: 16, boxHeight: 2, callbacks: { title: tooltipTitle } }
       },
       scales: {
         x: xScaleBase(),
@@ -213,7 +213,7 @@ function createTempsChart() {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
         legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 } } },
-        tooltip: { callbacks: { title: tooltipTitle, label: function(item) { return " " + item.dataset.label + ": " + item.parsed.y.toFixed(1) + " \u00B0C"; } } }
+        tooltip: { boxWidth: 16, boxHeight: 2, callbacks: { title: tooltipTitle, label: function(item) { return " " + item.dataset.label + ": " + item.parsed.y.toFixed(1) + " \u00B0C"; } } }
       },
       scales: {
         x: xScaleBase(),
@@ -279,7 +279,7 @@ function createSimpleChart(canvasId, label, color) {
     data: { labels: [], datasets: [{ label: label, data: [], borderColor: color, backgroundColor: color + "20", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
     options: {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.5,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { title: tooltipTitle } } },
+      plugins: { legend: { display: false }, tooltip: { boxWidth: 16, boxHeight: 2, callbacks: { title: tooltipTitle } } },
       scales: { x: xScaleBase(), y: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } } },
       interaction: { intersect: false, mode: "index" }
     }
