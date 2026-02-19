@@ -6,8 +6,10 @@ export declare class DucoBoxAccessory {
     private readonly accessory;
     private readonly log;
     private modes;
+    private flowService;
     private nodeId;
     private currentState;
+    private currentFlow;
     constructor(platform: DucoEnergyPlatform, accessory: PlatformAccessory, log: Logger, nodeId: number);
     private setVentilationState;
     private updateSwitchStates;

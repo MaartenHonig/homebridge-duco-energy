@@ -28,8 +28,10 @@ interface VentilationMode {
 
 export class DucoBoxAccessory {
   private modes: VentilationMode[] = [];
+  private flowService: Service;
   private nodeId: number;
   private currentState: string = 'AUTO';
+  private currentFlow: number = 0;
 
   constructor(
     private readonly platform: DucoEnergyPlatform,
@@ -51,7 +53,28 @@ export class DucoBoxAccessory {
       this.accessory.removeService(oldFan);
     }
 
-    // Create 4 switches with distinct names
+    // ─── Flow % indicator (Lightbulb, read-only brightness) ───────
+    this.flowService = this.accessory.getServiceById(this.platform.Service.Lightbulb, 'duco-flow')
+      || this.accessory.addService(this.platform.Service.Lightbulb, 'Duco Flow %', 'duco-flow');
+
+    this.flowService.setCharacteristic(this.platform.Characteristic.Name, 'Duco Flow %');
+    this.flowService.displayName = 'Duco Flow %';
+    try {
+      this.flowService.setCharacteristic(this.platform.Characteristic.ConfiguredName, 'Duco Flow %');
+    } catch { /* older HAP */ }
+
+    // Always "on" — ventilation is always running
+    this.flowService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => true)
+      .onSet(() => { /* ignore, can't turn off ventilation */ });
+
+    // Brightness = flow percentage (read-only display)
+    this.flowService.getCharacteristic(this.platform.Characteristic.Brightness)
+      .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
+      .onGet(() => this.currentFlow)
+      .onSet(() => { /* ignore, display only */ });
+
+    // ─── 4 Mode switches ─────────────────────────────────────────
     const modeDefinitions = [
       { name: 'Duco Auto', state: 'AUTO', subtype: 'duco-auto' },
       { name: 'Duco Speed 1', state: 'MAN1', subtype: 'duco-man1' },
@@ -138,9 +161,19 @@ export class DucoBoxAccessory {
 
   updateFromNode(node: DucoNode): void {
     const state = node.Ventilation?.State?.Val || 'AUTO';
+    const flow = node.Ventilation?.FlowLvlTgt?.Val ?? 0;
+
     if (state !== this.currentState) {
       this.currentState = state;
       this.updateSwitchStates();
+    }
+
+    if (flow !== this.currentFlow) {
+      this.currentFlow = flow;
+      this.flowService.updateCharacteristic(
+        this.platform.Characteristic.Brightness,
+        this.currentFlow,
+      );
     }
   }
 }
