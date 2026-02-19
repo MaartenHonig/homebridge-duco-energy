@@ -147,23 +147,12 @@ export class DucoBoxAccessory {
       service.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentState === def.state)
         .onSet((value: CharacteristicValue) => {
-          if (def.state === 'AUTO') {
-            // Auto switch: on = go to auto, off = ignore (you're already not in auto)
-            if (value) {
-              this.setVentilationState('AUTO', false);
-            }
+          if (value) {
+            this.setVentilationState(def.state, false);
           } else {
-            // Manual mode switches:
-            if (value) {
-              // Tapping an inactive manual mode → switch to it
-              this.setVentilationState(def.state, false);
-            } else {
-              // Tapping an active manual mode (toggle off) → stack timer (+15 min)
-              if (this.currentState === def.state) {
-                this.setVentilationState(def.state, true);
-                // Keep the switch visually ON since we're stacking, not turning off
-                service.updateCharacteristic(this.platform.Characteristic.On, true);
-              }
+            // Turning off the active mode → go to AUTO
+            if (this.currentState === def.state) {
+              this.setVentilationState('AUTO', false);
             }
           }
         });
