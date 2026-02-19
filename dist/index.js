@@ -1,20 +1,5 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
+const platform_1 = require("./platform");
+module.exports = (api) => {
+    api.registerPlatform("homebridge-duco-energy", "DucoEnergy", platform_1.DucoEnergyPlatform);
 };
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DashboardServer = exports.DataLogger = exports.DucoApiClient = exports.DucoSensorAccessory = exports.DucoVentilationAccessory = exports.DucoPlatform = exports.default = void 0;
-var platform_1 = require("./platform");
-Object.defineProperty(exports, "default", { enumerable: true, get: function () { return __importDefault(platform_1).default; } });
-var platform_2 = require("./platform");
-Object.defineProperty(exports, "DucoPlatform", { enumerable: true, get: function () { return platform_2.DucoPlatform; } });
-var ventilationAccessory_1 = require("./ventilationAccessory");
-Object.defineProperty(exports, "DucoVentilationAccessory", { enumerable: true, get: function () { return ventilationAccessory_1.DucoVentilationAccessory; } });
-var sensorAccessory_1 = require("./sensorAccessory");
-Object.defineProperty(exports, "DucoSensorAccessory", { enumerable: true, get: function () { return sensorAccessory_1.DucoSensorAccessory; } });
-var ducoApi_1 = require("./ducoApi");
-Object.defineProperty(exports, "DucoApiClient", { enumerable: true, get: function () { return ducoApi_1.DucoApiClient; } });
-var dataLogger_1 = require("./dataLogger");
-Object.defineProperty(exports, "DataLogger", { enumerable: true, get: function () { return dataLogger_1.DataLogger; } });
-var dashboard_1 = require("./dashboard");
-Object.defineProperty(exports, "DashboardServer", { enumerable: true, get: function () { return dashboard_1.DashboardServer; } });

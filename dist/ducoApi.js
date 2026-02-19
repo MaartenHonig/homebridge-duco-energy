@@ -5,177 +5,110 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DucoApiClient = void 0;
 const axios_1 = __importDefault(require("axios"));
-// ── API Client ───────────────────────────────────────────────────────────────
+// ─── API Client ─────────────────────────────────────────────────────────────
 class DucoApiClient {
-    constructor(host, port = 80) {
-        this.baseUrl = `http://${host}:${port}`;
+    constructor(host) {
+        this.baseUrl = `http://${host}`;
         this.client = axios_1.default.create({
             baseURL: this.baseUrl,
             timeout: 10000,
-            headers: { 'Accept': 'application/json' },
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
         });
     }
-    // ── Info endpoints ──────────────────────────────────────────────────────
     /**
-     * Get all node info — returns sensor readings, ventilation state, etc.
-     * This is the primary polling endpoint.
+     * Get API info / health check
+     */
+    async getApiInfo() {
+        const response = await this.client.get('/info');
+        return response.data;
+    }
+    /**
+     * Get all nodes with their current state and sensor data
      */
     async getNodes() {
-        try {
-            const resp = await this.client.get('/info/nodes');
-            // The API may return { Nodes: [...] } or just [...]
-            const data = resp.data;
-            if (data.Nodes)
-                return data.Nodes;
-            if (Array.isArray(data))
-                return data;
-            // Fallback: try alternative endpoint structure
-            const resp2 = await this.client.get('/nodes');
-            const data2 = resp2.data;
-            if (data2.Nodes)
-                return data2.Nodes;
-            if (Array.isArray(data2))
-                return data2;
-            return [];
-        }
-        catch (err) {
-            throw new Error(`Failed to get nodes: ${err.message}`);
-        }
+        const response = await this.client.get('/info/nodes');
+        return response.data;
     }
     /**
      * Get info for a specific node
      */
     async getNodeInfo(nodeId) {
-        try {
-            const resp = await this.client.get(`/info/nodes/${nodeId}`);
-            return resp.data;
-        }
-        catch (err) {
-            throw new Error(`Failed to get node ${nodeId}: ${err.message}`);
-        }
+        const response = await this.client.get(`/info/nodes/${nodeId}`);
+        return response.data;
     }
     /**
-     * Get system info (board serial, firmware versions, etc.)
-     */
-    async getSystemInfo() {
-        try {
-            const resp = await this.client.get('/info');
-            return resp.data;
-        }
-        catch (err) {
-            throw new Error(`Failed to get system info: ${err.message}`);
-        }
-    }
-    // ── Action endpoints ────────────────────────────────────────────────────
-    /**
-     * Get supported actions for the whole device
+     * Get supported actions for the device
      */
     async getActions() {
-        try {
-            const resp = await this.client.get('/action');
-            return resp.data.Actions || resp.data || [];
-        }
-        catch (err) {
-            throw new Error(`Failed to get actions: ${err.message}`);
-        }
+        const response = await this.client.get('/action');
+        return response.data;
     }
     /**
      * Get supported actions for a specific node
      */
     async getNodeActions(nodeId) {
-        try {
-            const resp = await this.client.get(`/action/${nodeId}`);
-            return resp.data.Actions || resp.data || [];
-        }
-        catch (err) {
-            throw new Error(`Failed to get node actions for ${nodeId}: ${err.message}`);
-        }
+        const response = await this.client.get(`/action/nodes/${nodeId}`);
+        return response.data;
     }
     /**
-     * Send an action to the whole device (e.g. set ventilation mode)
+     * Send an action to the whole device (e.g., set ventilation mode)
      */
     async sendAction(action, value) {
-        try {
-            await this.client.post('/action', {
-                Action: action,
-                Val: value,
-            });
-        }
-        catch (err) {
-            throw new Error(`Failed to send action ${action}: ${err.message}`);
-        }
+        await this.client.post('/action', {
+            Action: action,
+            Val: value,
+        });
     }
     /**
-     * Send an action to a specific node
+     * Send an action to a specific node (e.g., override a specific zone)
      */
     async sendNodeAction(nodeId, action, value) {
-        try {
-            await this.client.post(`/action/${nodeId}`, {
-                Action: action,
-                Val: value,
-            });
-        }
-        catch (err) {
-            throw new Error(`Failed to send action ${action} to node ${nodeId}: ${err.message}`);
-        }
+        await this.client.post(`/action/nodes/${nodeId}`, {
+            Action: action,
+            Val: value,
+        });
     }
-    // ── Config endpoints ────────────────────────────────────────────────────
     /**
-     * Get configuration for a specific node
+     * Get all config
+     */
+    async getConfig() {
+        const response = await this.client.get('/config');
+        return response.data;
+    }
+    /**
+     * Get config for a specific node
      */
     async getNodeConfig(nodeId) {
-        try {
-            const resp = await this.client.get(`/config/nodes/${nodeId}`);
-            return resp.data;
-        }
-        catch (err) {
-            throw new Error(`Failed to get config for node ${nodeId}: ${err.message}`);
-        }
+        const response = await this.client.get(`/config/nodes/${nodeId}`);
+        return response.data;
     }
-    // ── Health ──────────────────────────────────────────────────────────────
     /**
-     * Check API health — useful for verifying connectivity
+     * Set ventilation state for a node
+     * States: AUTO, MAN1, MAN2, MAN3, AWAY
      */
-    async checkHealth() {
+    async setNodeVentilationState(nodeId, state) {
+        await this.sendNodeAction(nodeId, 'SetVentilationState', state);
+    }
+    /**
+     * Set ventilation state for the whole box
+     */
+    async setVentilationState(state) {
+        await this.sendAction('SetVentilationState', state);
+    }
+    /**
+     * Test connectivity to the Duco box
+     */
+    async testConnection() {
         try {
-            const resp = await this.client.get('/health');
-            return resp.status === 200;
+            await this.getApiInfo();
+            return true;
         }
         catch {
             return false;
         }
-    }
-    /**
-     * Attempt auto-discovery of API structure.
-     * The local API might vary slightly between firmware versions.
-     * This method tries common endpoint patterns and returns what works.
-     */
-    async discoverEndpoints() {
-        const infoPaths = ['/info/nodes', '/nodes', '/info'];
-        const actionPaths = ['/action', '/actions'];
-        let infoEndpoint = '/info/nodes';
-        let actionEndpoint = '/action';
-        for (const path of infoPaths) {
-            try {
-                const resp = await this.client.get(path);
-                if (resp.status === 200 && resp.data) {
-                    infoEndpoint = path;
-                    break;
-                }
-            }
-            catch { /* try next */ }
-        }
-        for (const path of actionPaths) {
-            try {
-                const resp = await this.client.get(path);
-                if (resp.status === 200) {
-                    actionEndpoint = path;
-                    break;
-                }
-            }
-            catch { /* try next */ }
-        }
-        return { infoEndpoint, actionEndpoint };
     }
 }
 exports.DucoApiClient = DucoApiClient;

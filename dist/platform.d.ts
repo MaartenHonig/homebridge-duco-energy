@@ -1,42 +1,38 @@
 import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service, Characteristic } from 'homebridge';
-export interface DucoPluginConfig extends PlatformConfig {
-    host: string;
-    port?: number;
-    pollingInterval?: number;
-    dashboardPort?: number;
-    dataRetentionDays?: number;
-    boostDurationMinutes?: number;
-}
-export declare class DucoPlatform implements DynamicPlatformPlugin {
+import { DucoApiClient } from './ducoApi';
+export declare class DucoEnergyPlatform implements DynamicPlatformPlugin {
     readonly log: Logger;
-    readonly homebridgeApi: API;
+    readonly api: API;
     readonly Service: typeof Service;
     readonly Characteristic: typeof Characteristic;
-    private readonly accessories;
-    private readonly discoveredAccessories;
-    private api;
+    apiClient: DucoApiClient;
     private dataLogger;
     private dashboard;
+    private readonly accessories;
+    private boxAccessories;
+    private sensorAccessories;
     private pollingTimer;
-    private purgeTimer;
-    private config;
-    constructor(log: Logger, config: PlatformConfig, homebridgeApi: API);
+    private cleanupTimer;
+    private readonly config;
+    constructor(log: Logger, config: PlatformConfig, api: API);
     /**
-     * Called by Homebridge to restore cached accessories
+     * Called by Homebridge for each cached accessory at startup
      */
     configureAccessory(accessory: PlatformAccessory): void;
     /**
-     * Main initialization — connect to Duco, discover nodes, start polling
-     */
-    private initialize;
-    /**
-     * Discover all nodes on the Duco network and create accessories
+     * Discover Duco nodes and register accessories
      */
     private discoverDevices;
     /**
-     * Poll all node sensor data and update accessories + data logger
+     * Poll the Duco API at regular intervals
      */
-    private pollSensors;
+    private startPolling;
+    /**
+     * Start the web dashboard
+     */
+    private startDashboard;
+    /**
+     * Periodically clean up old data
+     */
+    private startCleanupTimer;
 }
-declare const _default: (api: API) => void;
-export default _default;

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Duco Energy Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #e6edf3; padding: 20px; }
+h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #58a6ff; }
+.subtitle { color: #8b949e; margin-bottom: 24px; font-size: 14px; }
+
+/* Node cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s; position: relative; }
+.card:hover { border-color: #58a6ff; background: #1c2333; }
+.card.selected { border-color: #58a6ff; background: #1c2333; box-shadow: 0 0 0 1px #58a6ff, 0 0 20px rgba(88,166,255,0.15); }
+.card .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.card .card-name { font-size: 15px; font-weight: 600; color: #e6edf3; }
+.card .card-type { font-size: 11px; color: #8b949e; background: #21262d; padding: 2px 8px; border-radius: 4px; }
+.card .state { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.state-auto { background: #238636; color: #fff; }
+.state-man1 { background: #1f6feb; color: #fff; }
+.state-man2 { background: #d29922; color: #000; }
+.state-man3 { background: #f85149; color: #fff; }
+.card .sensor-grid { display: grid; gap: 8px; margin-top: 10px; }
+.card .sensor-item { text-align: center; }
+.card .sensor-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.card .sensor-val { font-size: 20px; font-weight: 700; color: #e6edf3; line-height: 1.2; }
+.card .sensor-val .unit { font-size: 11px; font-weight: 400; color: #8b949e; }
+.card .selected-indicator { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: #58a6ff; display: none; }
+.card.selected .selected-indicator { display: block; }
+
+/* Heater indicator */
+.heater-status { font-size: 28px; font-weight: 700; margin-top: 10px; text-align: center; }
+.heater-off { color: #8b949e; }
+.heater-on { color: #f85149; }
+
+/* Range controls */
+.controls { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+.controls button { padding: 6px 16px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+.controls button:hover { background: #30363d; }
+.controls button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+
+/* Charts */
+.chart-container { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.chart-container h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+.loading { text-align: center; color: #8b949e; padding: 40px; }
+#nodeCharts .chart-container { /* node-specific charts */ }
+</style>
+</head>
+<body>
+
+<h1>&#x1F32C;&#xFE0F; Duco Energy Dashboard</h1>
+<p class="subtitle">Real-time ventilation monitoring &amp; sensor data</p>
+
+<div class="cards" id="liveCards"><div class="loading">Loading sensor data...</div></div>
+
+<div class="controls" id="rangeControls">
+  <button onclick="setRange('1h')">1 Hour</button>
+  <button onclick="setRange('6h')">6 Hours</button>
+  <button onclick="setRange('24h')" class="active">24 Hours</button>
+  <button onclick="setRange('7d')">7 Days</button>
+  <button onclick="setRange('30d')">30 Days</button>
+</div>
+
+<!-- Master overlay: always visible, dual Y-axis -->
+<div class="chart-container">
+  <h2>&#x1F50D; System Overview</h2>
+  <canvas id="chartMaster"></canvas>
+</div>
+
+<!-- Node-specific charts: change based on selected node type -->
+<div id="nodeCharts"></div>
+
+<script>
+var currentRange = "24h";
+var selectedNodeId = null;
+var selectedNodeType = null;
+var charts = {};
+var nodesData = []; // latest readings cache
+
+var tooltipTitle = function(items) {
+  if (!items.length) return "";
+  var d = new Date(items[0].parsed.x * 1000);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+};
+
+var xScaleBase = function() {
+  return {
+    type: "linear",
+    ticks: { color: "#8b949e", callback: function(val) { var d = new Date(val * 1000); return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }, maxTicksLimit: 8 },
+    grid: { color: "#21262d" }
+  };
+};
+
+// ─── MASTER OVERLAY CHART (dual Y-axis, auto-scaled) ──────────────
+
+function createMasterChart() {
+  var ctx = document.getElementById("chartMaster").getContext("2d");
+  charts.master = new Chart(ctx, {
+    type: "line",
+    data: { datasets: [
+      { label: "Humidity Sensor 1", data: [], borderColor: "#58a6ff", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: "yHumidity" },
+      { label: "Humidity Sensor 2", data: [], borderColor: "#3fb950", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: "yHumidity" },
+      { label: "Flow %", data: [], borderColor: "#bc8cff", backgroundColor: "#bc8cff15", tension: 0.3, pointRadius: 0, borderWidth: 2, fill: true, yAxisID: "yFlow" },
+      { label: "Heater", data: [], borderColor: "#f8514980", backgroundColor: "#f8514915", stepped: true, fill: true, pointRadius: 0, borderWidth: 1, borderDash: [4,4], yAxisID: "yFlow" }
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
+      plugins: {
+        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: "line", padding: 16, font: { size: 12 } } },
+        tooltip: { callbacks: { title: tooltipTitle } }
+      },
+      scales: {
+        x: xScaleBase(),
+        yHumidity: {
+          type: "linear", position: "left",
+          title: { display: true, text: "Humidity %", color: "#58a6ff" },
+          ticks: { color: "#8b949e" }, grid: { color: "#21262d" }
+        },
+        yFlow: {
+          type: "linear", position: "right",
+          title: { display: true, text: "Flow %", color: "#bc8cff" },
+          ticks: { color: "#8b949e" }, grid: { drawOnChartArea: false }
+        }
+      },
+      interaction: { intersect: false, mode: "index" }
+    }
+  });
+}
+
+async function updateMasterChart() {
+  // Find node IDs by type
+  var ucrhNodes = nodesData.filter(function(n) { return n.nodeType === "UCRH"; });
+  var boxNode = nodesData.find(function(n) { return n.nodeType === "BOX"; });
+  var switchNode = nodesData.find(function(n) { return n.nodeType === "SWITCH"; });
+
+  var fetches = [];
+
+  // Humidity for up to 2 UCRH sensors
+  if (ucrhNodes[0]) fetches.push(fetch("/api/chart/" + ucrhNodes[0].nodeId + "/rh?range=" + currentRange).then(function(r){return r.json();}));
+  else fetches.push(Promise.resolve([]));
+
+  if (ucrhNodes[1]) fetches.push(fetch("/api/chart/" + ucrhNodes[1].nodeId + "/rh?range=" + currentRange).then(function(r){return r.json();}));
+  else fetches.push(Promise.resolve([]));
+
+  // Flow from BOX
+  if (boxNode) fetches.push(fetch("/api/chart/" + boxNode.nodeId + "/flow_lvl_tgt?range=" + currentRange).then(function(r){return r.json();}));
+  else fetches.push(Promise.resolve([]));
+
+  // Heater state from SWITCH
+  if (switchNode) fetches.push(fetch("/api/timeline/" + switchNode.nodeId + "?range=" + currentRange).then(function(r){return r.json();}));
+  else fetches.push(Promise.resolve([]));
+
+  var results = await Promise.all(fetches);
+
+  // Update dataset labels with actual node names
+  if (ucrhNodes[0]) charts.master.data.datasets[0].label = (ucrhNodes[0].nodeName || "Sensor " + ucrhNodes[0].nodeId) + " Humidity";
+  if (ucrhNodes[1]) charts.master.data.datasets[1].label = (ucrhNodes[1].nodeName || "Sensor " + ucrhNodes[1].nodeId) + " Humidity";
+
+  charts.master.data.datasets[0].data = results[0].map(function(d){ return {x:d.timestamp, y:d.value}; });
+  charts.master.data.datasets[1].data = results[1].map(function(d){ return {x:d.timestamp, y:d.value}; });
+  charts.master.data.datasets[2].data = results[2].map(function(d){ return {x:d.timestamp, y:d.value}; });
+
+  // Heater: AUTO=0, anything else=max flow (show as spike on flow axis)
+  charts.master.data.datasets[3].data = results[3].map(function(d){
+    return {x: d.timestamp, y: d.state === "AUTO" ? 0 : 100};
+  });
+
+  charts.master.update("none");
+}
+
+// ─── NODE-SPECIFIC CHARTS ─────────────────────────────────────────
+
+function buildNodeCharts(nodeType) {
+  var container = document.getElementById("nodeCharts");
+
+  if (nodeType === "BOX") {
+    container.innerHTML =
+      '<div class="chart-row">' +
+      '<div class="chart-container"><h2>Target Flow Level (%)</h2><canvas id="nc1"></canvas></div>' +
+      '<div class="chart-container"><h2>Ventilation State</h2><canvas id="nc2"></canvas></div>' +
+      '</div>';
+    charts.nc1 = createSimpleChart("nc1", "Flow %", "#bc8cff");
+    charts.nc2 = createStateChart("nc2");
+
+  } else if (nodeType === "UCRH") {
+    container.innerHTML =
+      '<div class="chart-row">' +
+      '<div class="chart-container"><h2>Relative Humidity (%)</h2><canvas id="nc1"></canvas></div>' +
+      '<div class="chart-container"><h2>IAQ Humidity Index</h2><canvas id="nc2"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-container"><h2>Ventilation State</h2><canvas id="nc3"></canvas></div>';
+    charts.nc1 = createSimpleChart("nc1", "Humidity %", "#58a6ff");
+    charts.nc2 = createSimpleChart("nc2", "IAQ RH", "#3fb950");
+    charts.nc3 = createStateChart("nc3");
+
+  } else if (nodeType === "SWITCH") {
+    container.innerHTML =
+      '<div class="chart-container"><h2>Heater Activity</h2><canvas id="nc1"></canvas></div>';
+    charts.nc1 = createOnOffChart("nc1");
+  }
+}
+
+function createSimpleChart(canvasId, label, color) {
+  var ctx = document.getElementById(canvasId).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [{ label: label, data: [], borderColor: color, backgroundColor: color + "20", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: true, aspectRatio: 2.5,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: tooltipTitle } } },
+      scales: { x: xScaleBase(), y: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } } },
+      interaction: { intersect: false, mode: "index" }
+    }
+  });
+}
+
+function createStateChart(canvasId) {
+  var ctx = document.getElementById(canvasId).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [{ label: "State", data: [], borderColor: "#f85149", backgroundColor: "#f8514920", fill: true, stepped: true, pointRadius: 0, borderWidth: 2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: true, aspectRatio: 2.5,
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: tooltipTitle,
+        label: function(item) { var l={"0":"AUTO","1":"MAN1","2":"MAN2","3":"MAN3","-1":"AWAY"}; return " "+( l[String(item.parsed.y)] || item.parsed.y); }
+      } } },
+      scales: {
+        x: xScaleBase(),
+        y: { ticks: { color: "#8b949e", callback: function(v){var l={"0":"AUTO","1":"MAN1","2":"MAN2","3":"MAN3","-1":"AWAY"}; return l[String(v)]||v;}, stepSize:1 }, min:-1, max:3, grid:{color:"#21262d"} }
+      }
+    }
+  });
+}
+
+function createOnOffChart(canvasId) {
+  var ctx = document.getElementById(canvasId).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [{ label: "Heater", data: [], borderColor: "#f85149", backgroundColor: "#f8514930", fill: true, stepped: true, pointRadius: 0, borderWidth: 2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: true, aspectRatio: 3,
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: tooltipTitle,
+        label: function(item) { return item.parsed.y === 1 ? " ON" : " OFF"; }
+      } } },
+      scales: {
+        x: xScaleBase(),
+        y: { ticks: { color: "#8b949e", callback: function(v){ return v === 1 ? "ON" : v === 0 ? "OFF" : ""; }, stepSize:1 }, min: -0.2, max: 1.2, grid:{color:"#21262d"} }
+      }
+    }
+  });
+}
+
+async function updateNodeCharts(nodeId, nodeType) {
+  if (nodeType === "BOX") {
+    var resp1 = await fetch("/api/chart/"+nodeId+"/flow_lvl_tgt?range="+currentRange).then(function(r){return r.json();});
+    charts.nc1.data.datasets[0].data = resp1.map(function(d){return {x:d.timestamp,y:d.value};});
+    charts.nc1.update("none");
+
+    var resp2 = await fetch("/api/timeline/"+nodeId+"?range="+currentRange).then(function(r){return r.json();});
+    var sm={"AUTO":0,"MAN1":1,"MAN2":2,"MAN3":3,"AWAY":-1};
+    charts.nc2.data.datasets[0].data = resp2.map(function(d){return {x:d.timestamp, y:sm[d.state]!==undefined?sm[d.state]:0};});
+    charts.nc2.update("none");
+
+  } else if (nodeType === "UCRH") {
+    var resp1 = await fetch("/api/chart/"+nodeId+"/rh?range="+currentRange).then(function(r){return r.json();});
+    charts.nc1.data.datasets[0].data = resp1.map(function(d){return {x:d.timestamp,y:d.value};});
+    charts.nc1.update("none");
+
+    var resp2 = await fetch("/api/chart/"+nodeId+"/iaq_rh?range="+currentRange).then(function(r){return r.json();});
+    charts.nc2.data.datasets[0].data = resp2.map(function(d){return {x:d.timestamp,y:d.value};});
+    charts.nc2.update("none");
+
+    var resp3 = await fetch("/api/timeline/"+nodeId+"?range="+currentRange).then(function(r){return r.json();});
+    var sm={"AUTO":0,"MAN1":1,"MAN2":2,"MAN3":3,"AWAY":-1};
+    charts.nc3.data.datasets[0].data = resp3.map(function(d){return {x:d.timestamp, y:sm[d.state]!==undefined?sm[d.state]:0};});
+    charts.nc3.update("none");
+
+  } else if (nodeType === "SWITCH") {
+    var resp1 = await fetch("/api/timeline/"+nodeId+"?range="+currentRange).then(function(r){return r.json();});
+    charts.nc1.data.datasets[0].data = resp1.map(function(d){return {x:d.timestamp, y: d.state==="AUTO" ? 0 : 1};});
+    charts.nc1.update("none");
+  }
+}
+
+// ─── LIVE DATA & CARDS ────────────────────────────────────────────
+
+function buildCard(r) {
+  var sc = "state-" + (r.ventilationState || "auto").toLowerCase();
+  var sel = r.nodeId === selectedNodeId ? " selected" : "";
+  var type = r.nodeType || "?";
+
+  var content = "";
+  if (type === "BOX") {
+    content =
+      '<div class="sensor-grid" style="grid-template-columns: 1fr 1fr;">' +
+      '<div class="sensor-item"><div class="sensor-label">Flow</div><div class="sensor-val">' + (r.flowLvlTgt || 0) + '<span class="unit">%</span></div></div>' +
+      '<div class="sensor-item"><div class="sensor-label">State</div><div class="sensor-val" style="font-size:16px"><span class="state ' + sc + '">' + (r.ventilationState||"?") + '</span></div></div>' +
+      '</div>';
+
+  } else if (type === "UCRH") {
+    content =
+      '<div class="sensor-grid" style="grid-template-columns: 1fr 1fr 1fr;">' +
+      '<div class="sensor-item"><div class="sensor-label">Humidity</div><div class="sensor-val">' + (r.rh || 0).toFixed(1) + '<span class="unit">%</span></div></div>' +
+      '<div class="sensor-item"><div class="sensor-label">IAQ RH</div><div class="sensor-val">' + (r.iaqRh || 0) + '</div></div>' +
+      '<div class="sensor-item"><div class="sensor-label">State</div><div class="sensor-val" style="font-size:16px"><span class="state ' + sc + '">' + (r.ventilationState||"?") + '</span></div></div>' +
+      '</div>';
+
+  } else if (type === "SWITCH") {
+    var isOn = r.ventilationState && r.ventilationState !== "AUTO";
+    content =
+      '<div class="heater-status ' + (isOn ? "heater-on" : "heater-off") + '">' +
+      (isOn ? "&#x1F525; ON" : "OFF") +
+      '</div>';
+  }
+
+  return '<div class="card' + sel + '" onclick="selectNode(' + r.nodeId + ')" data-type="' + type + '">' +
+    '<div class="selected-indicator"></div>' +
+    '<div class="card-header"><span class="card-name">' + (r.nodeName || "Node " + r.nodeId) + '</span><span class="card-type">' + type + '</span></div>' +
+    content +
+    '</div>';
+}
+
+async function loadLiveData() {
+  try {
+    var resp = await fetch("/api/latest");
+    nodesData = await resp.json();
+    var container = document.getElementById("liveCards");
+    if (nodesData.length === 0) { container.innerHTML = '<div class="loading">No data yet...</div>'; return; }
+    if (!selectedNodeId) {
+      selectedNodeId = nodesData[0].nodeId;
+      selectedNodeType = nodesData[0].nodeType;
+    }
+    container.innerHTML = nodesData.map(buildCard).join("");
+  } catch(e) { console.error("Live data failed:", e); }
+}
+
+function selectNode(nodeId) {
+  var node = nodesData.find(function(n){ return n.nodeId === nodeId; });
+  if (!node) return;
+
+  selectedNodeId = nodeId;
+  var newType = node.nodeType;
+
+  document.querySelectorAll(".card").forEach(function(card) {
+    var m = (card.getAttribute("onclick") || "").match(/\d+/);
+    if (m) card.classList.toggle("selected", parseInt(m[0]) === nodeId);
+  });
+
+  // Rebuild node charts if type changed
+  if (newType !== selectedNodeType) {
+    selectedNodeType = newType;
+    buildNodeCharts(newType);
+  }
+
+  updateNodeCharts(nodeId, selectedNodeType);
+}
+
+async function refreshAll() {
+  if (!selectedNodeId) return;
+  await Promise.all([
+    updateMasterChart(),
+    updateNodeCharts(selectedNodeId, selectedNodeType)
+  ]);
+}
+
+function setRange(range) {
+  currentRange = range;
+  document.querySelectorAll("#rangeControls button").forEach(function(btn) {
+    var m = btn.getAttribute("onclick").match(/'([^']+)'/);
+    btn.classList.toggle("active", m && m[1] === range);
+  });
+  refreshAll();
+}
+
+async function init() {
+  createMasterChart();
+  await loadLiveData();
+  // Set initial node type and build charts
+  if (nodesData.length > 0) {
+    selectedNodeType = nodesData[0].nodeType;
+    buildNodeCharts(selectedNodeType);
+  }
+  await refreshAll();
+  setInterval(async function() { await loadLiveData(); await refreshAll(); }, 30000);
+}
+
+init();
+</script>
+</body>
+</html>

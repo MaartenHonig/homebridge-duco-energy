@@ -5,22 +5,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DataLogger = void 0;
 const sql_js_1 = __importDefault(require("sql.js"));
-const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 class DataLogger {
     constructor(storagePath, retentionDays = 30) {
         this.db = null;
         this.saveTimer = null;
         this.dirty = false;
+        this.dbPath = storagePath;
         this.retentionDays = retentionDays;
-        this.dbPath = path_1.default.join(storagePath, 'duco-history.db');
         this.ready = this.init();
     }
     async init() {
         const SQL = await (0, sql_js_1.default)();
+        const dbDir = path_1.default.dirname(this.dbPath);
+        if (!fs_1.default.existsSync(dbDir)) {
+            fs_1.default.mkdirSync(dbDir, { recursive: true });
+        }
         if (fs_1.default.existsSync(this.dbPath)) {
-            const fileBuffer = fs_1.default.readFileSync(this.dbPath);
-            this.db = new SQL.Database(fileBuffer);
+            const buffer = fs_1.default.readFileSync(this.dbPath);
+            this.db = new SQL.Database(buffer);
         }
         else {
             this.db = new SQL.Database();
@@ -30,70 +34,105 @@ class DataLogger {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp INTEGER NOT NULL,
         node_id INTEGER NOT NULL,
+        node_name TEXT NOT NULL,
         node_type TEXT NOT NULL,
-        node_name TEXT NOT NULL DEFAULT '',
-        humidity REAL,
-        temperature REAL,
-        co2 REAL,
-        ventilation_mode TEXT,
         ventilation_state TEXT,
-        fan_speed_supply REAL,
-        fan_speed_exhaust REAL,
-        flow_rate_supply REAL,
-        flow_rate_exhaust REAL,
-        time_state_remain REAL
+        ventilation_mode TEXT,
+        time_state_remain INTEGER DEFAULT 0,
+        flow_lvl_tgt INTEGER DEFAULT 0,
+        iaq_co2 REAL DEFAULT 0,
+        iaq_rh REAL DEFAULT 0,
+        co2 REAL DEFAULT 0,
+        rh REAL DEFAULT 0
       )
     `);
         this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON sensor_readings(timestamp)');
-        this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node ON sensor_readings(node_id, timestamp)');
+        this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_id ON sensor_readings(node_id)');
+        this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_timestamp ON sensor_readings(node_id, timestamp)');
         this.saveTimer = setInterval(() => this.saveToDisk(), 60000);
     }
     saveToDisk() {
-        if (this.db && this.dirty) {
+        if (!this.db || !this.dirty)
+            return;
+        try {
             const data = this.db.export();
             const buffer = Buffer.from(data);
             fs_1.default.writeFileSync(this.dbPath, buffer);
             this.dirty = false;
+        }
+        catch {
+            // Will retry next interval
         }
     }
     async logNodes(nodes) {
         await this.ready;
         if (!this.db)
             return;
-        const timestamp = Date.now();
+        const timestamp = Math.floor(Date.now() / 1000);
+        const stmt = this.db.prepare(`
+      INSERT INTO sensor_readings (
+        timestamp, node_id, node_name, node_type,
+        ventilation_state, ventilation_mode, time_state_remain, flow_lvl_tgt,
+        iaq_co2, iaq_rh, co2, rh
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
         for (const node of nodes) {
-            const nodeType = node.General?.Type || 'UNKNOWN';
-            const nodeName = node.General?.Ident || `Node ${node.Node}`;
-            let temperature = null;
-            if (node.Sensor?.Temp != null) {
-                temperature = node.Sensor.Temp > 100 ? node.Sensor.Temp / 10 : node.Sensor.Temp;
-            }
-            else if (node.HeatRecovery?.Temp_Eta != null) {
-                const t = node.HeatRecovery.Temp_Eta;
-                temperature = t > 100 ? t / 10 : t;
-            }
-            this.db.run(`INSERT INTO sensor_readings (
-          timestamp, node_id, node_type, node_name, humidity, temperature, co2,
-          ventilation_mode, ventilation_state, fan_speed_supply, fan_speed_exhaust,
-          flow_rate_supply, flow_rate_exhaust, time_state_remain
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [timestamp, node.Node, nodeType, nodeName,
-                node.Sensor?.RH ?? null, temperature, node.Sensor?.CO2 ?? null,
-                node.Ventilation?.Mode ?? null, node.Ventilation?.State ?? null,
-                node.Fan?.SpeedRpm_Sup ?? null, node.Fan?.SpeedRpm_Eha ?? null,
-                node.Fan?.FlowRate_Sup ?? null, node.Fan?.FlowRate_Eha ?? null,
-                node.Ventilation?.TimeStateRemain ?? null]);
+            stmt.run([
+                timestamp,
+                node.Node,
+                node.General?.Name?.Val ?? `Node ${node.Node}`,
+                node.General?.Type?.Val ?? 'UNKNOWN',
+                node.Ventilation?.State?.Val ?? '',
+                node.Ventilation?.Mode?.Val ?? '',
+                node.Ventilation?.TimeStateRemain?.Val ?? 0,
+                node.Ventilation?.FlowLvlTgt?.Val ?? 0,
+                node.Sensor?.IaqCo2?.Val ?? 0,
+                node.Sensor?.IaqRh?.Val ?? 0,
+                node.Sensor?.Co2?.Val ?? 0,
+                node.Sensor?.Rh?.Val ?? 0,
+            ]);
         }
+        stmt.free();
         this.dirty = true;
     }
-    async getReadings(nodeId, fromTimestamp, toTimestamp) {
+    async getChartData(nodeId, field, fromTimestamp, toTimestamp) {
         await this.ready;
         if (!this.db)
             return [];
-        const stmt = this.db.prepare('SELECT * FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC');
-        stmt.bind([nodeId, fromTimestamp, toTimestamp]);
+        const validFields = [
+            'rh', 'co2', 'iaq_co2', 'iaq_rh',
+            'flow_lvl_tgt', 'time_state_remain',
+        ];
+        if (!validFields.includes(field)) {
+            throw new Error(`Invalid field: ${field}`);
+        }
         const results = [];
-        while (stmt.step())
-            results.push(this.rowToReading(stmt.getAsObject()));
+        const stmt = this.db.prepare(`SELECT timestamp, ${field} as value
+       FROM sensor_readings
+       WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`);
+        stmt.bind([nodeId, fromTimestamp, toTimestamp]);
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            results.push({ timestamp: row.timestamp, value: row.value });
+        }
+        stmt.free();
+        return results;
+    }
+    async getVentilationTimeline(nodeId, fromTimestamp, toTimestamp) {
+        await this.ready;
+        if (!this.db)
+            return [];
+        const results = [];
+        const stmt = this.db.prepare(`SELECT timestamp, ventilation_state as state, ventilation_mode as mode
+       FROM sensor_readings
+       WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`);
+        stmt.bind([nodeId, fromTimestamp, toTimestamp]);
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            results.push(row);
+        }
         stmt.free();
         return results;
     }
@@ -101,12 +140,27 @@ class DataLogger {
         await this.ready;
         if (!this.db)
             return [];
-        const stmt = this.db.prepare(`SELECT sr.* FROM sensor_readings sr INNER JOIN (
-        SELECT node_id, MAX(timestamp) as max_ts FROM sensor_readings GROUP BY node_id
-      ) latest ON sr.node_id = latest.node_id AND sr.timestamp = latest.max_ts ORDER BY sr.node_id ASC`);
         const results = [];
-        while (stmt.step())
-            results.push(this.rowToReading(stmt.getAsObject()));
+        const stmt = this.db.prepare(`
+      SELECT
+        sr.timestamp, sr.node_id as nodeId, sr.node_name as nodeName,
+        sr.node_type as nodeType, sr.ventilation_state as ventilationState,
+        sr.ventilation_mode as ventilationMode,
+        sr.time_state_remain as timeStateRemain,
+        sr.flow_lvl_tgt as flowLvlTgt,
+        sr.iaq_co2 as iaqCo2, sr.iaq_rh as iaqRh,
+        sr.co2, sr.rh
+      FROM sensor_readings sr
+      INNER JOIN (
+        SELECT node_id, MAX(timestamp) as max_ts
+        FROM sensor_readings
+        GROUP BY node_id
+      ) latest ON sr.node_id = latest.node_id AND sr.timestamp = latest.max_ts
+      ORDER BY sr.node_id
+    `);
+        while (stmt.step()) {
+            results.push(stmt.getAsObject());
+        }
         stmt.free();
         return results;
     }
@@ -114,75 +168,31 @@ class DataLogger {
         await this.ready;
         if (!this.db)
             return [];
-        const stmt = this.db.prepare('SELECT DISTINCT node_id as nodeId, node_type as nodeType, node_name as nodeName FROM sensor_readings ORDER BY node_id ASC');
         const results = [];
+        const stmt = this.db.prepare(`
+      SELECT DISTINCT node_id as nodeId, node_name as nodeName, node_type as nodeType
+      FROM sensor_readings
+      ORDER BY node_id
+    `);
         while (stmt.step()) {
-            const row = stmt.getAsObject();
-            results.push({ nodeId: row.nodeId, nodeType: row.nodeType, nodeName: row.nodeName });
+            results.push(stmt.getAsObject());
         }
         stmt.free();
         return results;
     }
-    async getChartData(nodeId, fromTimestamp, toTimestamp, maxPoints = 500) {
+    async cleanup() {
         await this.ready;
         if (!this.db)
-            return [];
-        const countStmt = this.db.prepare('SELECT COUNT(*) as cnt FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?');
-        countStmt.bind([nodeId, fromTimestamp, toTimestamp]);
-        countStmt.step();
-        const cnt = countStmt.getAsObject().cnt;
-        countStmt.free();
-        if (cnt <= maxPoints)
-            return this.getReadings(nodeId, fromTimestamp, toTimestamp);
-        const bucketSize = Math.ceil((toTimestamp - fromTimestamp) / maxPoints);
-        const stmt = this.db.prepare(`SELECT (timestamp / ? * ?) as timestamp, node_id, node_type, node_name,
-        AVG(humidity) as humidity, AVG(temperature) as temperature, AVG(co2) as co2,
-        ventilation_mode, ventilation_state,
-        AVG(fan_speed_supply) as fan_speed_supply, AVG(fan_speed_exhaust) as fan_speed_exhaust,
-        AVG(flow_rate_supply) as flow_rate_supply, AVG(flow_rate_exhaust) as flow_rate_exhaust,
-        AVG(time_state_remain) as time_state_remain
-      FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
-      GROUP BY timestamp / ? ORDER BY timestamp ASC`);
-        stmt.bind([bucketSize, bucketSize, nodeId, fromTimestamp, toTimestamp, bucketSize]);
-        const results = [];
-        while (stmt.step())
-            results.push(this.rowToReading(stmt.getAsObject()));
-        stmt.free();
-        return results;
-    }
-    async purgeOldData() {
-        await this.ready;
-        if (!this.db)
-            return 0;
-        const cutoff = Date.now() - (this.retentionDays * 24 * 60 * 60 * 1000);
+            return;
+        const cutoff = Math.floor(Date.now() / 1000) - this.retentionDays * 86400;
         this.db.run('DELETE FROM sensor_readings WHERE timestamp < ?', [cutoff]);
-        const changes = this.db.getRowsModified();
-        if (changes > 0)
-            this.dirty = true;
-        return changes;
-    }
-    rowToReading(row) {
-        return {
-            timestamp: row.timestamp,
-            nodeId: (row.node_id ?? row.nodeId),
-            nodeType: (row.node_type ?? row.nodeType),
-            nodeName: (row.node_name ?? row.nodeName),
-            humidity: row.humidity,
-            temperature: row.temperature,
-            co2: row.co2,
-            ventilationMode: (row.ventilation_mode ?? row.ventilationMode),
-            ventilationState: (row.ventilation_state ?? row.ventilationState),
-            fanSpeedSupply: (row.fan_speed_supply ?? row.fanSpeedSupply),
-            fanSpeedExhaust: (row.fan_speed_exhaust ?? row.fanSpeedExhaust),
-            flowRateSupply: (row.flow_rate_supply ?? row.flowRateSupply),
-            flowRateExhaust: (row.flow_rate_exhaust ?? row.flowRateExhaust),
-            timeStateRemain: (row.time_state_remain ?? row.timeStateRemain),
-        };
+        this.dirty = true;
+        this.saveToDisk();
     }
     close() {
-        this.saveToDisk();
         if (this.saveTimer)
             clearInterval(this.saveTimer);
+        this.saveToDisk();
         if (this.db)
             this.db.close();
     }

@@ -1,23 +1,27 @@
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
-import fs from 'fs';
+import initSqlJs, { Database } from 'sql.js';
+type SqlJsDatabase = Database;
 import path from 'path';
+import fs from 'fs';
 import { DucoNode } from './ducoApi';
 
 export interface SensorReading {
   timestamp: number;
   nodeId: number;
-  nodeType: string;
   nodeName: string;
-  humidity: number | null;
-  temperature: number | null;
-  co2: number | null;
-  ventilationMode: string | null;
-  ventilationState: string | null;
-  fanSpeedSupply: number | null;
-  fanSpeedExhaust: number | null;
-  flowRateSupply: number | null;
-  flowRateExhaust: number | null;
-  timeStateRemain: number | null;
+  nodeType: string;
+  ventilationState: string;
+  ventilationMode: string;
+  timeStateRemain: number;
+  flowLvlTgt: number;
+  iaqCo2: number;
+  iaqRh: number;
+  co2: number;
+  rh: number;
+}
+
+export interface ChartDataPoint {
+  timestamp: number;
+  value: number;
 }
 
 export class DataLogger {
@@ -29,17 +33,22 @@ export class DataLogger {
   private dirty = false;
 
   constructor(storagePath: string, retentionDays: number = 30) {
+    this.dbPath = storagePath;
     this.retentionDays = retentionDays;
-    this.dbPath = path.join(storagePath, 'duco-history.db');
     this.ready = this.init();
   }
 
   private async init(): Promise<void> {
     const SQL = await initSqlJs();
 
+    const dbDir = path.dirname(this.dbPath);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+
     if (fs.existsSync(this.dbPath)) {
-      const fileBuffer = fs.readFileSync(this.dbPath);
-      this.db = new SQL.Database(fileBuffer);
+      const buffer = fs.readFileSync(this.dbPath);
+      this.db = new SQL.Database(buffer);
     } else {
       this.db = new SQL.Database();
     }
@@ -49,33 +58,35 @@ export class DataLogger {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp INTEGER NOT NULL,
         node_id INTEGER NOT NULL,
+        node_name TEXT NOT NULL,
         node_type TEXT NOT NULL,
-        node_name TEXT NOT NULL DEFAULT '',
-        humidity REAL,
-        temperature REAL,
-        co2 REAL,
-        ventilation_mode TEXT,
         ventilation_state TEXT,
-        fan_speed_supply REAL,
-        fan_speed_exhaust REAL,
-        flow_rate_supply REAL,
-        flow_rate_exhaust REAL,
-        time_state_remain REAL
+        ventilation_mode TEXT,
+        time_state_remain INTEGER DEFAULT 0,
+        flow_lvl_tgt INTEGER DEFAULT 0,
+        iaq_co2 REAL DEFAULT 0,
+        iaq_rh REAL DEFAULT 0,
+        co2 REAL DEFAULT 0,
+        rh REAL DEFAULT 0
       )
     `);
 
     this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON sensor_readings(timestamp)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node ON sensor_readings(node_id, timestamp)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_id ON sensor_readings(node_id)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_readings_node_timestamp ON sensor_readings(node_id, timestamp)');
 
     this.saveTimer = setInterval(() => this.saveToDisk(), 60000);
   }
 
   private saveToDisk(): void {
-    if (this.db && this.dirty) {
+    if (!this.db || !this.dirty) return;
+    try {
       const data = this.db.export();
       const buffer = Buffer.from(data);
       fs.writeFileSync(this.dbPath, buffer);
       this.dirty = false;
+    } catch {
+      // Will retry next interval
     }
   }
 
@@ -83,44 +94,92 @@ export class DataLogger {
     await this.ready;
     if (!this.db) return;
 
-    const timestamp = Date.now();
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const stmt = this.db.prepare(`
+      INSERT INTO sensor_readings (
+        timestamp, node_id, node_name, node_type,
+        ventilation_state, ventilation_mode, time_state_remain, flow_lvl_tgt,
+        iaq_co2, iaq_rh, co2, rh
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
     for (const node of nodes) {
-      const nodeType = node.General?.Type || 'UNKNOWN';
-      const nodeName = node.General?.Ident || `Node ${node.Node}`;
-
-      let temperature: number | null = null;
-      if (node.Sensor?.Temp != null) {
-        temperature = node.Sensor.Temp > 100 ? node.Sensor.Temp / 10 : node.Sensor.Temp;
-      } else if (node.HeatRecovery?.Temp_Eta != null) {
-        const t = node.HeatRecovery.Temp_Eta;
-        temperature = t > 100 ? t / 10 : t;
-      }
-
-      this.db.run(
-        `INSERT INTO sensor_readings (
-          timestamp, node_id, node_type, node_name, humidity, temperature, co2,
-          ventilation_mode, ventilation_state, fan_speed_supply, fan_speed_exhaust,
-          flow_rate_supply, flow_rate_exhaust, time_state_remain
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [timestamp, node.Node, nodeType, nodeName,
-         node.Sensor?.RH ?? null, temperature, node.Sensor?.CO2 ?? null,
-         node.Ventilation?.Mode ?? null, node.Ventilation?.State ?? null,
-         node.Fan?.SpeedRpm_Sup ?? null, node.Fan?.SpeedRpm_Eha ?? null,
-         node.Fan?.FlowRate_Sup ?? null, node.Fan?.FlowRate_Eha ?? null,
-         node.Ventilation?.TimeStateRemain ?? null],
-      );
+      stmt.run([
+        timestamp,
+        node.Node,
+        node.General?.Name?.Val ?? `Node ${node.Node}`,
+        node.General?.Type?.Val ?? 'UNKNOWN',
+        node.Ventilation?.State?.Val ?? '',
+        node.Ventilation?.Mode?.Val ?? '',
+        node.Ventilation?.TimeStateRemain?.Val ?? 0,
+        node.Ventilation?.FlowLvlTgt?.Val ?? 0,
+        node.Sensor?.IaqCo2?.Val ?? 0,
+        node.Sensor?.IaqRh?.Val ?? 0,
+        node.Sensor?.Co2?.Val ?? 0,
+        node.Sensor?.Rh?.Val ?? 0,
+      ]);
     }
+
+    stmt.free();
     this.dirty = true;
   }
 
-  async getReadings(nodeId: number, fromTimestamp: number, toTimestamp: number): Promise<SensorReading[]> {
+  async getChartData(
+    nodeId: number,
+    field: string,
+    fromTimestamp: number,
+    toTimestamp: number,
+  ): Promise<ChartDataPoint[]> {
     await this.ready;
     if (!this.db) return [];
+
+    const validFields = [
+      'rh', 'co2', 'iaq_co2', 'iaq_rh',
+      'flow_lvl_tgt', 'time_state_remain',
+    ];
+    if (!validFields.includes(field)) {
+      throw new Error(`Invalid field: ${field}`);
+    }
+
+    const results: ChartDataPoint[] = [];
     const stmt = this.db.prepare(
-      'SELECT * FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC');
+      `SELECT timestamp, ${field} as value
+       FROM sensor_readings
+       WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`,
+    );
     stmt.bind([nodeId, fromTimestamp, toTimestamp]);
-    const results: SensorReading[] = [];
-    while (stmt.step()) results.push(this.rowToReading(stmt.getAsObject()));
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as { timestamp: number; value: number };
+      results.push({ timestamp: row.timestamp, value: row.value });
+    }
+    stmt.free();
+    return results;
+  }
+
+  async getVentilationTimeline(
+    nodeId: number,
+    fromTimestamp: number,
+    toTimestamp: number,
+  ): Promise<{ timestamp: number; state: string; mode: string }[]> {
+    await this.ready;
+    if (!this.db) return [];
+
+    const results: { timestamp: number; state: string; mode: string }[] = [];
+    const stmt = this.db.prepare(
+      `SELECT timestamp, ventilation_state as state, ventilation_mode as mode
+       FROM sensor_readings
+       WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`,
+    );
+    stmt.bind([nodeId, fromTimestamp, toTimestamp]);
+
+    while (stmt.step()) {
+      const row = stmt.getAsObject() as { timestamp: number; state: string; mode: string };
+      results.push(row);
+    }
     stmt.free();
     return results;
   }
@@ -128,91 +187,63 @@ export class DataLogger {
   async getLatestReadings(): Promise<SensorReading[]> {
     await this.ready;
     if (!this.db) return [];
-    const stmt = this.db.prepare(
-      `SELECT sr.* FROM sensor_readings sr INNER JOIN (
-        SELECT node_id, MAX(timestamp) as max_ts FROM sensor_readings GROUP BY node_id
-      ) latest ON sr.node_id = latest.node_id AND sr.timestamp = latest.max_ts ORDER BY sr.node_id ASC`);
-    const results: SensorReading[] = [];
-    while (stmt.step()) results.push(this.rowToReading(stmt.getAsObject()));
-    stmt.free();
-    return results;
-  }
 
-  async getKnownNodes(): Promise<Array<{ nodeId: number; nodeType: string; nodeName: string }>> {
-    await this.ready;
-    if (!this.db) return [];
-    const stmt = this.db.prepare(
-      'SELECT DISTINCT node_id as nodeId, node_type as nodeType, node_name as nodeName FROM sensor_readings ORDER BY node_id ASC');
-    const results: Array<{ nodeId: number; nodeType: string; nodeName: string }> = [];
+    const results: SensorReading[] = [];
+    const stmt = this.db.prepare(`
+      SELECT
+        sr.timestamp, sr.node_id as nodeId, sr.node_name as nodeName,
+        sr.node_type as nodeType, sr.ventilation_state as ventilationState,
+        sr.ventilation_mode as ventilationMode,
+        sr.time_state_remain as timeStateRemain,
+        sr.flow_lvl_tgt as flowLvlTgt,
+        sr.iaq_co2 as iaqCo2, sr.iaq_rh as iaqRh,
+        sr.co2, sr.rh
+      FROM sensor_readings sr
+      INNER JOIN (
+        SELECT node_id, MAX(timestamp) as max_ts
+        FROM sensor_readings
+        GROUP BY node_id
+      ) latest ON sr.node_id = latest.node_id AND sr.timestamp = latest.max_ts
+      ORDER BY sr.node_id
+    `);
+
     while (stmt.step()) {
-      const row = stmt.getAsObject() as Record<string, unknown>;
-      results.push({ nodeId: row.nodeId as number, nodeType: row.nodeType as string, nodeName: row.nodeName as string });
+      results.push(stmt.getAsObject() as unknown as SensorReading);
     }
     stmt.free();
     return results;
   }
 
-  async getChartData(nodeId: number, fromTimestamp: number, toTimestamp: number, maxPoints: number = 500): Promise<SensorReading[]> {
+  async getKnownNodes(): Promise<{ nodeId: number; nodeName: string; nodeType: string }[]> {
     await this.ready;
     if (!this.db) return [];
-    const countStmt = this.db.prepare(
-      'SELECT COUNT(*) as cnt FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?');
-    countStmt.bind([nodeId, fromTimestamp, toTimestamp]);
-    countStmt.step();
-    const cnt = (countStmt.getAsObject() as Record<string, unknown>).cnt as number;
-    countStmt.free();
 
-    if (cnt <= maxPoints) return this.getReadings(nodeId, fromTimestamp, toTimestamp);
+    const results: { nodeId: number; nodeName: string; nodeType: string }[] = [];
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT node_id as nodeId, node_name as nodeName, node_type as nodeType
+      FROM sensor_readings
+      ORDER BY node_id
+    `);
 
-    const bucketSize = Math.ceil((toTimestamp - fromTimestamp) / maxPoints);
-    const stmt = this.db.prepare(
-      `SELECT (timestamp / ? * ?) as timestamp, node_id, node_type, node_name,
-        AVG(humidity) as humidity, AVG(temperature) as temperature, AVG(co2) as co2,
-        ventilation_mode, ventilation_state,
-        AVG(fan_speed_supply) as fan_speed_supply, AVG(fan_speed_exhaust) as fan_speed_exhaust,
-        AVG(flow_rate_supply) as flow_rate_supply, AVG(flow_rate_exhaust) as flow_rate_exhaust,
-        AVG(time_state_remain) as time_state_remain
-      FROM sensor_readings WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
-      GROUP BY timestamp / ? ORDER BY timestamp ASC`);
-    stmt.bind([bucketSize, bucketSize, nodeId, fromTimestamp, toTimestamp, bucketSize]);
-    const results: SensorReading[] = [];
-    while (stmt.step()) results.push(this.rowToReading(stmt.getAsObject()));
+    while (stmt.step()) {
+      results.push(stmt.getAsObject() as unknown as { nodeId: number; nodeName: string; nodeType: string });
+    }
     stmt.free();
     return results;
   }
 
-  async purgeOldData(): Promise<number> {
+  async cleanup(): Promise<void> {
     await this.ready;
-    if (!this.db) return 0;
-    const cutoff = Date.now() - (this.retentionDays * 24 * 60 * 60 * 1000);
+    if (!this.db) return;
+    const cutoff = Math.floor(Date.now() / 1000) - this.retentionDays * 86400;
     this.db.run('DELETE FROM sensor_readings WHERE timestamp < ?', [cutoff]);
-    const changes = this.db.getRowsModified();
-    if (changes > 0) this.dirty = true;
-    return changes;
-  }
-
-  private rowToReading(row: Record<string, unknown>): SensorReading {
-    return {
-      timestamp: row.timestamp as number,
-      nodeId: (row.node_id ?? row.nodeId) as number,
-      nodeType: (row.node_type ?? row.nodeType) as string,
-      nodeName: (row.node_name ?? row.nodeName) as string,
-      humidity: row.humidity as number | null,
-      temperature: row.temperature as number | null,
-      co2: row.co2 as number | null,
-      ventilationMode: (row.ventilation_mode ?? row.ventilationMode) as string | null,
-      ventilationState: (row.ventilation_state ?? row.ventilationState) as string | null,
-      fanSpeedSupply: (row.fan_speed_supply ?? row.fanSpeedSupply) as number | null,
-      fanSpeedExhaust: (row.fan_speed_exhaust ?? row.fanSpeedExhaust) as number | null,
-      flowRateSupply: (row.flow_rate_supply ?? row.flowRateSupply) as number | null,
-      flowRateExhaust: (row.flow_rate_exhaust ?? row.flowRateExhaust) as number | null,
-      timeStateRemain: (row.time_state_remain ?? row.timeStateRemain) as number | null,
-    };
+    this.dirty = true;
+    this.saveToDisk();
   }
 
   close(): void {
-    this.saveToDisk();
     if (this.saveTimer) clearInterval(this.saveTimer);
+    this.saveToDisk();
     if (this.db) this.db.close();
   }
 }
