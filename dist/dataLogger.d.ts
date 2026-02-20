@@ -49,6 +49,11 @@ export declare class DataLogger {
     }[]>;
     logSystemTemps(temps: SystemTemps): Promise<void>;
     getSystemTempsChart(field: string, fromTimestamp: number, toTimestamp: number): Promise<ChartDataPoint[]>;
+    getFlowWithDriver(boxNodeId: number, fromTimestamp: number, toTimestamp: number): Promise<{
+        timestamp: number;
+        flow: number;
+        driver: number;
+    }[]>;
     getLatestSystemTemps(): Promise<SystemTemps | null>;
     cleanup(): Promise<void>;
     close(): void;

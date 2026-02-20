@@ -123,6 +123,18 @@ class DashboardServer {
                 res.status(500).json({ error: 'Failed' });
             }
         });
+        this.app.get('/api/flow-driver/:nodeId', async (req, res) => {
+            try {
+                const nodeId = parseInt(req.params.nodeId, 10);
+                const range = req.query.range || '24h';
+                const now = Math.floor(Date.now() / 1000);
+                const from = this.rangeToFrom(range, now);
+                res.json(await this.dataLogger.getFlowWithDriver(nodeId, from, now));
+            }
+            catch {
+                res.status(500).json({ error: 'Failed' });
+            }
+        });
         this.app.get('/api/timeline/:nodeId', async (req, res) => {
             try {
                 const nodeId = parseInt(req.params.nodeId, 10);

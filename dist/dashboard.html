@@ -135,14 +135,32 @@ function createMasterChart() {
     data: { datasets: [
       { label: "Humidity Sensor 1", data: [], borderColor: "#58a6ff", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: "yHumidity" },
       { label: "Humidity Sensor 2", data: [], borderColor: "#3fb950", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: "yHumidity" },
-      { label: "Flow %", data: [], borderColor: "#bc8cff", backgroundColor: "#bc8cff15", tension: 0.3, pointRadius: 0, borderWidth: 2, fill: true, yAxisID: "yFlow" },
+      { label: "Flow %", data: [], borderColor: "#bc8cff", backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: "yFlow" },
+      { label: "Flow (Sensor 1)", data: [], borderColor: "transparent", backgroundColor: "#58a6ff30", tension: 0.3, pointRadius: 0, borderWidth: 0, fill: true, yAxisID: "yFlow" },
+      { label: "Flow (Sensor 2)", data: [], borderColor: "transparent", backgroundColor: "#3fb95030", tension: 0.3, pointRadius: 0, borderWidth: 0, fill: true, yAxisID: "yFlow" },
       { label: "Heater", data: [], borderColor: "#f8514980", backgroundColor: "#f8514915", stepped: true, fill: true, pointRadius: 0, borderWidth: 1, borderDash: [4,4], yAxisID: "yFlow" }
     ] },
     options: {
       responsive: true, maintainAspectRatio: true, aspectRatio: 2.8,
       plugins: {
-        legend: { display: true, position: "top", labels: { color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 } } },
-        tooltip: { boxWidth: 16, boxHeight: 2, callbacks: { title: tooltipTitle } }
+        legend: {
+          display: true, position: "top",
+          labels: {
+            color: "#c9d1d9", usePointStyle: true, pointStyle: 'line', pointStyleWidth: 24, padding: 16, font: { size: 12 },
+            filter: function(item) {
+              // Hide the two fill datasets from the legend
+              return item.text !== "Flow (Sensor 1)" && item.text !== "Flow (Sensor 2)";
+            }
+          }
+        },
+        tooltip: {
+          boxWidth: 16, boxHeight: 2,
+          callbacks: { title: tooltipTitle },
+          filter: function(item) {
+            // Hide fill datasets from tooltip
+            return item.dataset.label !== "Flow (Sensor 1)" && item.dataset.label !== "Flow (Sensor 2)";
+          }
+        }
       },
       scales: {
         x: xScaleBase(),
@@ -177,8 +195,8 @@ async function updateMasterChart() {
   if (ucrhNodes[1]) fetches.push(fetch("/api/chart/" + ucrhNodes[1].nodeId + "/rh?range=" + currentRange).then(function(r){return r.json();}));
   else fetches.push(Promise.resolve([]));
 
-  // Flow from BOX
-  if (boxNode) fetches.push(fetch("/api/chart/" + boxNode.nodeId + "/flow_lvl_tgt?range=" + currentRange).then(function(r){return r.json();}));
+  // Flow with driver info from BOX
+  if (boxNode) fetches.push(fetch("/api/flow-driver/" + boxNode.nodeId + "?range=" + currentRange).then(function(r){return r.json();}));
   else fetches.push(Promise.resolve([]));
 
   // Heater state from SWITCH
@@ -188,15 +206,28 @@ async function updateMasterChart() {
   var results = await Promise.all(fetches);
 
   // Update dataset labels with actual node names
-  if (ucrhNodes[0]) charts.master.data.datasets[0].label = (ucrhNodes[0].nodeName || "Sensor " + ucrhNodes[0].nodeId) + " Humidity";
-  if (ucrhNodes[1]) charts.master.data.datasets[1].label = (ucrhNodes[1].nodeName || "Sensor " + ucrhNodes[1].nodeId) + " Humidity";
+  var sensor1Id = ucrhNodes[0] ? ucrhNodes[0].nodeId : 0;
+  var sensor2Id = ucrhNodes[1] ? ucrhNodes[1].nodeId : 0;
+  if (ucrhNodes[0]) charts.master.data.datasets[0].label = (ucrhNodes[0].nodeName || "Sensor " + sensor1Id) + " Humidity";
+  if (ucrhNodes[1]) charts.master.data.datasets[1].label = (ucrhNodes[1].nodeName || "Sensor " + sensor2Id) + " Humidity";
 
+  // Humidity lines
   charts.master.data.datasets[0].data = results[0].map(function(d){ return {x:d.timestamp, y:d.value}; });
   charts.master.data.datasets[1].data = results[1].map(function(d){ return {x:d.timestamp, y:d.value}; });
-  charts.master.data.datasets[2].data = results[2].map(function(d){ return {x:d.timestamp, y:d.value}; });
 
-  // Heater: AUTO=0, anything else=max flow (show as spike on flow axis)
-  charts.master.data.datasets[3].data = results[3].map(function(d){
+  // Flow line (no fill)
+  charts.master.data.datasets[2].data = results[2].map(function(d){ return {x:d.timestamp, y:d.flow}; });
+
+  // Flow fill split by driver: sensor 1 fill (blue) and sensor 2 fill (green)
+  charts.master.data.datasets[3].data = results[2].map(function(d){
+    return {x: d.timestamp, y: d.driver === sensor1Id ? d.flow : 0};
+  });
+  charts.master.data.datasets[4].data = results[2].map(function(d){
+    return {x: d.timestamp, y: d.driver === sensor2Id ? d.flow : 0};
+  });
+
+  // Heater: AUTO=0, anything else=max flow
+  charts.master.data.datasets[5].data = results[3].map(function(d){
     return {x: d.timestamp, y: d.state === "AUTO" ? 0 : 100};
   });
 

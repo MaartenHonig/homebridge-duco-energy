@@ -223,6 +223,62 @@ class DataLogger {
         stmt.free();
         return results;
     }
+    async getFlowWithDriver(boxNodeId, fromTimestamp, toTimestamp) {
+        await this.ready;
+        if (!this.db)
+            return [];
+        // Get all UCRH sensor node IDs
+        const sensorNodes = [];
+        const nstmt = this.db.prepare(`SELECT DISTINCT node_id FROM sensor_readings WHERE node_type = 'UCRH'`);
+        while (nstmt.step()) {
+            const row = nstmt.getAsObject();
+            sensorNodes.push(row.node_id);
+        }
+        nstmt.free();
+        if (sensorNodes.length === 0)
+            return [];
+        // Get flow data from BOX
+        const flowData = [];
+        const fstmt = this.db.prepare(`SELECT timestamp, flow_lvl_tgt as flow FROM sensor_readings
+       WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC`);
+        fstmt.bind([boxNodeId, fromTimestamp, toTimestamp]);
+        while (fstmt.step()) {
+            flowData.push(fstmt.getAsObject());
+        }
+        fstmt.free();
+        // Get iaq_rh data for all sensors, indexed by timestamp
+        const sensorIaq = new Map();
+        for (const sId of sensorNodes) {
+            const iaqMap = new Map();
+            const sstmt = this.db.prepare(`SELECT timestamp, iaq_rh FROM sensor_readings
+         WHERE node_id = ? AND timestamp >= ? AND timestamp <= ?
+         ORDER BY timestamp ASC`);
+            sstmt.bind([sId, fromTimestamp, toTimestamp]);
+            while (sstmt.step()) {
+                const row = sstmt.getAsObject();
+                iaqMap.set(row.timestamp, row.iaq_rh);
+            }
+            sstmt.free();
+            sensorIaq.set(sId, iaqMap);
+        }
+        // For each flow point, find which sensor has the lowest IaqRh (= most demand)
+        const results = [];
+        for (const fp of flowData) {
+            let lowestIaq = Infinity;
+            let driver = sensorNodes[0];
+            for (const sId of sensorNodes) {
+                const iaqMap = sensorIaq.get(sId);
+                const iaq = iaqMap.get(fp.timestamp) ?? Infinity;
+                if (iaq < lowestIaq) {
+                    lowestIaq = iaq;
+                    driver = sId;
+                }
+            }
+            results.push({ timestamp: fp.timestamp, flow: fp.flow, driver });
+        }
+        return results;
+    }
     async getLatestSystemTemps() {
         await this.ready;
         if (!this.db)
