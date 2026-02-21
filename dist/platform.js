@@ -24,6 +24,7 @@ class DucoEnergyPlatform {
         this.sensorAccessories = new Map();
         this.pollingTimer = null;
         this.cleanupTimer = null;
+        this.scheduledOverrideActive = false;
         this.config = config;
         if (!this.config.host) {
             this.log.error('No host configured! Please set the Duco Connectivity Board IP address.');
@@ -188,6 +189,8 @@ class DucoEnergyPlatform {
                 catch (err) {
                     this.log.debug(`System info fetch failed (temps): ${err}`);
                 }
+                // Scheduled override check
+                this.checkScheduledOverride(nodes);
             }
             catch (err) {
                 this.log.warn(`Poll failed: ${err}`);
@@ -197,6 +200,68 @@ class DucoEnergyPlatform {
         poll();
         // Regular interval
         this.pollingTimer = setInterval(poll, interval);
+    }
+    /**
+     * Check if a scheduled override should be active and enforce it.
+     * Sends the configured mode command every poll cycle while in the window,
+     * which keeps the timer refreshed. When the window ends, sends AUTO once.
+     */
+    async checkScheduledOverride(nodes) {
+        const sched = this.config.scheduledOverride;
+        if (!sched?.enabled || !sched.startTime || !sched.endTime || !sched.mode)
+            return;
+        const now = new Date();
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const [startH, startM] = sched.startTime.split(':').map(Number);
+        const [endH, endM] = sched.endTime.split(':').map(Number);
+        const startMinutes = startH * 60 + startM;
+        const endMinutes = endH * 60 + endM;
+        // Handle overnight windows (e.g. 23:00 - 07:00)
+        let inWindow;
+        if (startMinutes <= endMinutes) {
+            inWindow = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+        }
+        else {
+            inWindow = currentMinutes >= startMinutes || currentMinutes < endMinutes;
+        }
+        if (inWindow) {
+            // Re-send mode every poll cycle to keep the Duco timer alive.
+            // The 15-min timer resets each time, so with 30s polling it never expires.
+            const boxNode = nodes.find(n => n.General?.Type?.Val === 'BOX');
+            const currentState = boxNode?.Ventilation?.State?.Val ?? 'AUTO';
+            const timeRemain = boxNode?.Ventilation?.TimeStateRemain?.Val ?? 0;
+            // Only send if not already in the right mode, or if timer is getting low (< 5 min)
+            if (currentState !== sched.mode || timeRemain < 300) {
+                this.log.debug(`Scheduled override: enforcing ${sched.mode} (current: ${currentState}, timer: ${timeRemain}s)`);
+                for (const [nodeId] of this.boxAccessories) {
+                    try {
+                        await this.apiClient.setNodeVentilationState(nodeId, sched.mode);
+                    }
+                    catch (err) {
+                        this.log.warn(`Scheduled override API call failed: ${err}`);
+                    }
+                }
+            }
+            if (!this.scheduledOverrideActive) {
+                this.scheduledOverrideActive = true;
+                this.log.info(`Scheduled override started: ${sched.mode} until ${sched.endTime}`);
+            }
+        }
+        else {
+            // Outside window — if override was active, send AUTO to release
+            if (this.scheduledOverrideActive) {
+                this.scheduledOverrideActive = false;
+                this.log.info('Scheduled override ended, returning to AUTO');
+                for (const [nodeId] of this.boxAccessories) {
+                    try {
+                        await this.apiClient.setNodeVentilationState(nodeId, 'AUTO');
+                    }
+                    catch (err) {
+                        this.log.warn(`Scheduled override release failed: ${err}`);
+                    }
+                }
+            }
+        }
     }
     /**
      * Start the web dashboard

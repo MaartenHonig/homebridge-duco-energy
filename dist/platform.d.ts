@@ -13,6 +13,7 @@ export declare class DucoEnergyPlatform implements DynamicPlatformPlugin {
     private sensorAccessories;
     private pollingTimer;
     private cleanupTimer;
+    private scheduledOverrideActive;
     private readonly config;
     constructor(log: Logger, config: PlatformConfig, api: API);
     /**
@@ -27,6 +28,12 @@ export declare class DucoEnergyPlatform implements DynamicPlatformPlugin {
      * Poll the Duco API at regular intervals
      */
     private startPolling;
+    /**
+     * Check if a scheduled override should be active and enforce it.
+     * Sends the configured mode command every poll cycle while in the window,
+     * which keeps the timer refreshed. When the window ends, sends AUTO once.
+     */
+    private checkScheduledOverride;
     /**
      * Start the web dashboard
      */

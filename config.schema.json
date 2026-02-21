@@ -57,6 +57,43 @@
         "minimum": 1,
         "maximum": 365,
         "description": "How many days of sensor data to keep for the dashboard."
+      },
+      "scheduledOverride": {
+        "title": "Scheduled Override",
+        "type": "object",
+        "description": "Force a specific ventilation mode during a time window (e.g. night mode).",
+        "properties": {
+          "enabled": {
+            "title": "Enable Scheduled Override",
+            "type": "boolean",
+            "default": false
+          },
+          "startTime": {
+            "title": "Start Time (HH:MM)",
+            "type": "string",
+            "default": "00:00",
+            "pattern": "^([01]?[0-9]|2[0-3]):[0-5][0-9]$",
+            "description": "Start time in 24h format."
+          },
+          "endTime": {
+            "title": "End Time (HH:MM)",
+            "type": "string",
+            "default": "07:00",
+            "pattern": "^([01]?[0-9]|2[0-3]):[0-5][0-9]$",
+            "description": "End time in 24h format."
+          },
+          "mode": {
+            "title": "Ventilation Mode",
+            "type": "string",
+            "default": "MAN1",
+            "oneOf": [
+              { "title": "Speed 1 (Low)", "enum": ["MAN1"] },
+              { "title": "Speed 2 (Medium)", "enum": ["MAN2"] },
+              { "title": "Speed 3 (High)", "enum": ["MAN3"] }
+            ],
+            "description": "The ventilation mode to force during the scheduled window."
+          }
+        }
       }
     }
   }
